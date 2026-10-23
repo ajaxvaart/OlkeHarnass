@@ -1,0 +1,29 @@
+# Installeren:
+#   sudo cp deploy/olkeharnass.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now olkeharnass
+# Logs: journalctl -u olkeharnass -f
+[Unit]
+Description=OlkeHarnass
+After=network-online.target ollama.service
+Wants=ollama.service
+
+[Service]
+Type=simple
+User=olke
+WorkingDirectory=/opt/olkeharnass
+Environment=OLKEHARNASS_CONFIG=/opt/olkeharnass/config/olkeharnass.yaml
+# Cloud-keys hier, niet in de config. Rechten: chmod 600.
+EnvironmentFile=-/opt/olkeharnass/.env
+ExecStart=/opt/olkeharnass/.venv/bin/olkeharnass
+Restart=on-failure
+RestartSec=5
+# Beperk de schade als er iets misgaat
+MemoryMax=600M
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/opt/olkeharnass
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

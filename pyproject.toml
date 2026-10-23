@@ -1,0 +1,32 @@
+[project]
+name = "olkeharnass"
+version = "0.1.0"
+description = "OlkeHarnass, lokale AI-harnass: OpenAI-compatibele API met gedeelde tools, voor eigen apps"
+requires-python = ">=3.11"
+# Versies vastgezet. LiteLLM beweegt snel: update bewust, lees de changelog en draai
+# de tests (test_litellm_echt.py vangt kapotte releases; 1.106.2 faalde met tools: module mcp ontbrak).
+dependencies = [
+    "fastapi==0.162.0",
+    "uvicorn==0.54.0",
+    "litellm==1.105.3",
+    "pydantic==2.14.1",
+    "PyYAML==6.0.3",
+]
+
+[project.optional-dependencies]
+dev = ["pytest==9.1.1", "httpx==0.28.1"]
+
+[project.scripts]
+olkeharnass = "olkeharnass.main:run"
+olkeharnass-key = "olkeharnass.auth:cli"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["tests"]

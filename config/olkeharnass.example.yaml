@@ -1,0 +1,35 @@
+# Kopieer naar config/olkeharnass.yaml (staat in .gitignore) en vul de key-hashes in.
+
+server:
+  host: 127.0.0.1   # alleen localhost; iets anders wordt geweigerd
+  port: 8400
+
+tool_lus:
+  max_rondes: 5     # maximaal aantal tool-rondes per verzoek
+
+# Modellen zoals apps ze kennen. De app geeft de naam links op als `model`.
+models:
+  lokaal-klein:
+    litellm_model: ollama_chat/qwen3:4b
+    api_base: http://127.0.0.1:11434
+    extra:
+      keep_alive: 5m        # model na 5 minuten uit het geheugen
+  cloud-snel:
+    litellm_model: anthropic/claude-haiku-5-5
+    api_key_env: ANTHROPIC_API_KEY
+  cloud-sterk:
+    litellm_model: anthropic/claude-sonnet-5-5
+    api_key_env: ANTHROPIC_API_KEY
+
+# Apps met hun key (alleen de hash) en wat ze mogen.
+# Nieuwe key: olkeharnass-key nieuw <appnaam>
+apps:
+  pa:
+    key_sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+    models: [lokaal-klein, cloud-snel, cloud-sterk]
+    tools: [huidige_tijd, rekenen]
+  dashboard:
+    key_sha256: "1111111111111111111111111111111111111111111111111111111111111111"
+    models: [lokaal-klein]
+    tools: [huidige_tijd]
+    max_tool_rondes: 2
