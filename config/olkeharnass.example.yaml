@@ -17,14 +17,17 @@ models:
     api_base: http://127.0.0.1:11434
     extra:
       keep_alive: 5m        # model na 5 minuten uit het geheugen
-    # Ollama-modellen tellen niet mee voor het budget, cloudmodellen wel.
-    # Overschrijven kan met telt_voor_budget: true/false.
+    # Ollama is gratis: geen prijs nodig.
   cloud-snel:
     litellm_model: anthropic/claude-haiku-5-5
     api_key_env: ANTHROPIC_API_KEY
+    # Euro per miljoen tokens. Verplicht voor cloudmodellen.
+    # VOORBEELDWAARDEN: neem de actuele prijs van de provider over (omgerekend naar euro).
+    prijs: {invoer: 1.00, uitvoer: 5.00}
   cloud-sterk:
     litellm_model: anthropic/claude-sonnet-5-5
     api_key_env: ANTHROPIC_API_KEY
+    prijs: {invoer: 3.00, uitvoer: 15.00}   # VOORBEELD, controleer
 
 # Apps met hun key (alleen de hash) en wat ze mogen.
 # Nieuwe key: olkeharnass-key nieuw <appnaam>
@@ -33,9 +36,9 @@ apps:
     key_sha256: "0000000000000000000000000000000000000000000000000000000000000000"
     models: [lokaal-klein, cloud-snel, cloud-sterk]
     tools: [huidige_tijd, rekenen]
-    budget:                 # tokens (invoer + uitvoer) op cloudmodellen
-      tokens_per_dag: 200000
-      tokens_per_maand: 2000000
+    budget:                 # in euro; alleen cloudmodellen kosten geld
+      euro_per_dag: 1.00
+      euro_per_maand: 10.00
   dashboard:
     key_sha256: "1111111111111111111111111111111111111111111111111111111111111111"
     models: [lokaal-klein]

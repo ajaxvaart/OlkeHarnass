@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 
+import pytest
 from fastapi.testclient import TestClient
 
 from conftest import PA_KEY, NepLLM, auth, tekst_antwoord, tool_antwoord
@@ -12,13 +13,19 @@ from olkeharnass.main import maak_app
 
 VRAAG = [{"role": "user", "content": "hoi"}]
 
+# Prijs zo gekozen dat het rekenen makkelijk is: 0,001 euro per invoertoken,
+# 0,002 per uitvoertoken. tekst_antwoord (10 in, 5 uit) kost dan 0,02;
+# tool_antwoord (20 in, 8 uit) kost 0,036.
+TEKST = 0.02
+TOOL = 0.036
+
 
 def _settings(**budget) -> Settings:
     return Settings.model_validate({
         "models": {
-            "cloud": {"litellm_model": "anthropic/claude-haiku-5-5"},
+            "cloud": {"litellm_model": "anthropic/claude-haiku-5-5",
+                      "prijs": {"invoer": 1000, "uitvoer": 2000}},
             "lokaal": {"litellm_model": "ollama_chat/qwen3:4b"},
-            "lokaal-telt": {"litellm_model": "ollama_chat/qwen3:4b", "telt_voor_budget": True},
         },
         "apps": {"pa": {"key_sha256": hash_key(PA_KEY), "models": ["*"], "tools": ["*"],
                         "budget": budget}},
@@ -38,48 +45,53 @@ def _vraag(client, model="cloud"):
 
 def test_register_telt_per_dag_en_maand():
     r = Gebruiksregister(":memory:")
-    r.voeg_toe("pa", 100, date(2026, 10, 1))
-    r.voeg_toe("pa", 50, date(2026, 10, 23))
-    r.voeg_toe("pa", 25, date(2026, 10, 23))
-    r.voeg_toe("pa", 999, date(2026, 9, 30))
-    r.voeg_toe("ander", 7, date(2026, 10, 23))
+    r.voeg_toe("pa", 100, 10, 1.0, date(2026, 10, 1))
+    r.voeg_toe("pa", 50, 5, 0.5, date(2026, 10, 23))
+    r.voeg_toe("pa", 25, 5, 0.25, date(2026, 10, 23))
+    r.voeg_toe("pa", 999, 9, 9.0, date(2026, 9, 30))
+    r.voeg_toe("ander", 7, 7, 7.0, date(2026, 10, 23))
     g = r.gebruik("pa", date(2026, 10, 23))
-    assert (g.dag, g.maand) == (75, 175)
+    assert (g.dag.tokens_invoer, g.dag.tokens_uitvoer) == (75, 10)
+    assert g.dag.kosten == pytest.approx(0.75)
+    assert g.maand.kosten == pytest.approx(1.75)
+    assert g.maand.tokens_invoer == 175
 
 
 def test_register_blijft_bewaard(tmp_path):
     pad = tmp_path / "sub" / "db.sqlite"
     r = Gebruiksregister(pad)
-    r.voeg_toe("pa", 10)
+    r.voeg_toe("pa", 10, 2, 0.1)
     r.sluit()
-    assert Gebruiksregister(pad).gebruik("pa").dag == 10
+    assert Gebruiksregister(pad).gebruik("pa").dag.kosten == pytest.approx(0.1)
 
 
-def test_cloudgebruik_wordt_geboekt():
+def test_kosten_worden_geboekt():
     client, _, register = _client([tekst_antwoord("a")])
     assert _vraag(client).status_code == 200
-    assert register.gebruik("pa").dag == 15
+    g = register.gebruik("pa").dag
+    assert g.kosten == pytest.approx(TEKST)
+    assert (g.tokens_invoer, g.tokens_uitvoer) == (10, 5)
 
 
 def test_tool_lus_boekt_elke_ronde():
     client, _, register = _client([tool_antwoord("rekenen", {"expressie": "1+1"}),
                                    tekst_antwoord("2")])
     _vraag(client)
-    assert register.gebruik("pa").dag == 28 + 15
+    assert register.gebruik("pa").dag.kosten == pytest.approx(TOOL + TEKST)
 
 
-def test_lokaal_telt_standaard_niet_mee():
-    client, _, register = _client([tekst_antwoord("a"), tekst_antwoord("b")])
+def test_lokaal_kost_niets_maar_tokens_worden_geteld():
+    client, _, register = _client([tekst_antwoord("a")])
     _vraag(client, "lokaal")
-    assert register.gebruik("pa").dag == 0
-    _vraag(client, "lokaal-telt")
-    assert register.gebruik("pa").dag == 15
+    g = register.gebruik("pa").dag
+    assert g.kosten == 0
+    assert g.tokens_invoer == 10
 
 
 def test_dagbudget_bereikt_geeft_429_zonder_modelaanroep():
     register = Gebruiksregister(":memory:")
-    register.voeg_toe("pa", 100)
-    client, llm, _ = _client([], register, tokens_per_dag=100)
+    register.voeg_toe("pa", 0, 0, 1.0)
+    client, llm, _ = _client([], register, euro_per_dag=1.0)
     r = _vraag(client)
     assert r.status_code == 429
     assert r.json()["error"]["type"] == "budget_exceeded"
@@ -88,22 +100,22 @@ def test_dagbudget_bereikt_geeft_429_zonder_modelaanroep():
 
 def test_maandbudget_bereikt():
     register = Gebruiksregister(":memory:")
-    register.voeg_toe("pa", 500)
-    client, _, _ = _client([], register, tokens_per_dag=10_000, tokens_per_maand=500)
+    register.voeg_toe("pa", 0, 0, 5.0)
+    client, _, _ = _client([], register, euro_per_dag=100, euro_per_maand=5)
     assert "maandbudget" in _vraag(client).json()["error"]["message"]
 
 
 def test_lokaal_werkt_ook_als_budget_op_is():
     register = Gebruiksregister(":memory:")
-    register.voeg_toe("pa", 100)
-    client, _, _ = _client([tekst_antwoord("a")], register, tokens_per_dag=100)
+    register.voeg_toe("pa", 0, 0, 1.0)
+    client, _, _ = _client([tekst_antwoord("a")], register, euro_per_dag=1.0)
     assert _vraag(client, "lokaal").status_code == 200
 
 
 def test_budget_stopt_tool_lus_halverwege():
-    # Eerste ronde (28 tokens) brengt het verbruik boven de 20: tweede aanroep wordt geweigerd.
+    # De eerste ronde kost 0,036 en brengt het verbruik boven 0,03: de tweede wordt geweigerd.
     client, llm, _ = _client([tool_antwoord("rekenen", {"expressie": "1+1"}),
-                              tekst_antwoord("2")], tokens_per_dag=20)
+                              tekst_antwoord("2")], euro_per_dag=0.03)
     r = _vraag(client)
     assert r.status_code == 429
     assert len(llm.aanroepen) == 1
@@ -111,8 +123,9 @@ def test_budget_stopt_tool_lus_halverwege():
 
 def test_budget_endpoint():
     register = Gebruiksregister(":memory:")
-    register.voeg_toe("pa", 42)
-    client, _, _ = _client([], register, tokens_per_dag=100)
+    register.voeg_toe("pa", 1000, 200, 0.42)
+    client, _, _ = _client([], register, euro_per_dag=1.5)
     body = client.get("/v1/budget", headers=auth()).json()
-    assert body["dag"] == {"verbruikt": 42, "limiet": 100}
-    assert body["maand"] == {"verbruikt": 42, "limiet": None}
+    assert body["dag"] == {"kosten_euro": 0.42, "limiet_euro": 1.5,
+                           "tokens_invoer": 1000, "tokens_uitvoer": 200}
+    assert body["maand"]["limiet_euro"] is None

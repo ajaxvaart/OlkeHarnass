@@ -63,10 +63,19 @@ def maak_app(
         """Geen OpenAI-endpoint: verbruik en limieten van deze app."""
         app_naam, app = app_info
         g = api.state.register.gebruik(app_naam)
+
+        def periode(p, limiet):
+            return {
+                "kosten_euro": round(p.kosten, 4),
+                "limiet_euro": limiet,
+                "tokens_invoer": p.tokens_invoer,
+                "tokens_uitvoer": p.tokens_uitvoer,
+            }
+
         return {
             "app": app_naam,
-            "dag": {"verbruikt": g.dag, "limiet": app.budget.tokens_per_dag},
-            "maand": {"verbruikt": g.maand, "limiet": app.budget.tokens_per_maand},
+            "dag": periode(g.dag, app.budget.euro_per_dag),
+            "maand": periode(g.maand, app.budget.euro_per_maand),
         }
 
     @api.post("/v1/chat/completions")

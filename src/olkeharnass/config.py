@@ -31,6 +31,13 @@ class ServerConfig(BaseModel):
         return v
 
 
+class PrijsConfig(BaseModel):
+    """Prijs in euro per miljoen tokens. Neem de prijs van de provider over."""
+
+    invoer: float = Field(ge=0)
+    uitvoer: float = Field(ge=0)
+
+
 class ModelConfig(BaseModel):
     """Een model zoals apps het kennen, met de LiteLLM-instellingen erachter."""
 
@@ -38,16 +45,33 @@ class ModelConfig(BaseModel):
     api_base: str | None = None
     api_key_env: str | None = None  # naam van de omgevingsvariabele met de key
     timeout: float = 300.0
-    # Telt dit model mee voor het budget? Standaard: ja, behalve Ollama (lokaal, gratis).
-    telt_voor_budget: bool | None = None
+    # Verplicht voor cloudmodellen, zodat het budget nooit stilletjes op nul rekent.
+    # Ollama-modellen zijn gratis en hebben geen prijs nodig.
+    prijs: PrijsConfig | None = None
     # Extra parameters die ongewijzigd naar LiteLLM gaan, bijv. keep_alive voor Ollama.
     extra: dict[str, Any] = Field(default_factory=dict)
 
     @property
-    def telt_mee(self) -> bool:
-        if self.telt_voor_budget is not None:
-            return self.telt_voor_budget
-        return not self.litellm_model.startswith(("ollama/", "ollama_chat/"))
+    def is_lokaal(self) -> bool:
+        return self.litellm_model.startswith(("ollama/", "ollama_chat/"))
+
+    @model_validator(mode="after")
+    def cloud_heeft_prijs(self) -> "ModelConfig":
+        if self.prijs is None and not self.is_lokaal:
+            raise ValueError(
+                f"model {self.litellm_model!r} heeft geen prijs; "
+                "zet prijs.invoer en prijs.uitvoer (euro per miljoen tokens)"
+            )
+        return self
+
+    @property
+    def kost_geld(self) -> bool:
+        return self.prijs is not None and (self.prijs.invoer > 0 or self.prijs.uitvoer > 0)
+
+    def kosten(self, tokens_invoer: int, tokens_uitvoer: int) -> float:
+        if self.prijs is None:
+            return 0.0
+        return (tokens_invoer * self.prijs.invoer + tokens_uitvoer * self.prijs.uitvoer) / 1_000_000
 
     def litellm_kwargs(self) -> dict[str, Any]:
         kwargs: dict[str, Any] = {"model": self.litellm_model, "timeout": self.timeout}
@@ -63,10 +87,10 @@ class ModelConfig(BaseModel):
 
 
 class BudgetConfig(BaseModel):
-    """Limieten in tokens (invoer plus uitvoer). None betekent geen limiet."""
+    """Limieten in euro. None betekent geen limiet."""
 
-    tokens_per_dag: int | None = None
-    tokens_per_maand: int | None = None
+    euro_per_dag: float | None = Field(default=None, ge=0)
+    euro_per_maand: float | None = Field(default=None, ge=0)
 
 
 class AppConfig(BaseModel):

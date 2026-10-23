@@ -65,12 +65,9 @@ def _actieve_tools(verzoek: dict[str, Any], app: AppConfig, registry: ToolRegist
     return list(gevraagd)
 
 
-def _totaal_tokens(antwoord: dict[str, Any]) -> int:
+def _tokens(antwoord: dict[str, Any]) -> tuple[int, int]:
     u = antwoord.get("usage") or {}
-    totaal = u.get("total_tokens")
-    if isinstance(totaal, int):
-        return totaal
-    return int(u.get("prompt_tokens") or 0) + int(u.get("completion_tokens") or 0)
+    return int(u.get("prompt_tokens") or 0), int(u.get("completion_tokens") or 0)
 
 
 class _BudgetLLM:
@@ -80,18 +77,21 @@ class _BudgetLLM:
         self, llm: LLMFunctie, register: Gebruiksregister | None,
         app_naam: str, app: AppConfig, model: ModelConfig,
     ) -> None:
-        self.llm, self.register, self.app_naam, self.app = llm, register, app_naam, app
-        self.actief = register is not None and model.telt_mee
+        self.llm, self.register, self.app_naam = llm, register, app_naam
+        self.app, self.model = app, model
 
     async def __call__(self, **kwargs: Any) -> dict[str, Any]:
-        if self.actief:
-            fout = overschreden(self.app, self.register.gebruik(self.app_naam))  # type: ignore[union-attr]
+        if self.register is not None and self.model.kost_geld:
+            fout = overschreden(self.app, self.register.gebruik(self.app_naam))
             if fout:
                 log.warning("app=%s %s", self.app_naam, fout)
                 raise VerzoekFout(429, fout, "budget_exceeded")
         antwoord = await self.llm(**kwargs)
-        if self.actief:
-            self.register.voeg_toe(self.app_naam, _totaal_tokens(antwoord))  # type: ignore[union-attr]
+        if self.register is not None:
+            invoer, uitvoer = _tokens(antwoord)
+            self.register.voeg_toe(
+                self.app_naam, invoer, uitvoer, self.model.kosten(invoer, uitvoer)
+            )
         return antwoord
 
 
