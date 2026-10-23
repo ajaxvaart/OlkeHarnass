@@ -55,6 +55,7 @@ class NepLLM:
 @pytest.fixture
 def settings() -> Settings:
     return Settings.model_validate({
+        "opslag": {"database": ":memory:"},
         "models": {
             "lokaal-klein": {"litellm_model": "ollama_chat/qwen3:4b",
                              "api_base": "http://127.0.0.1:11434"},

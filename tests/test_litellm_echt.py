@@ -16,6 +16,7 @@ from olkeharnass.main import maak_app
 
 def _client() -> TestClient:
     settings = Settings.model_validate({
+        "opslag": {"database": ":memory:"},
         "models": {
             "nep": {"litellm_model": "openai/gpt-nep", "extra": {
                 "api_key": "x", "mock_response": "hallo vanuit litellm"}},

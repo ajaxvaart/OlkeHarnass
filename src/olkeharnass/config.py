@@ -38,8 +38,16 @@ class ModelConfig(BaseModel):
     api_base: str | None = None
     api_key_env: str | None = None  # naam van de omgevingsvariabele met de key
     timeout: float = 300.0
+    # Telt dit model mee voor het budget? Standaard: ja, behalve Ollama (lokaal, gratis).
+    telt_voor_budget: bool | None = None
     # Extra parameters die ongewijzigd naar LiteLLM gaan, bijv. keep_alive voor Ollama.
     extra: dict[str, Any] = Field(default_factory=dict)
+
+    @property
+    def telt_mee(self) -> bool:
+        if self.telt_voor_budget is not None:
+            return self.telt_voor_budget
+        return not self.litellm_model.startswith(("ollama/", "ollama_chat/"))
 
     def litellm_kwargs(self) -> dict[str, Any]:
         kwargs: dict[str, Any] = {"model": self.litellm_model, "timeout": self.timeout}
@@ -54,6 +62,13 @@ class ModelConfig(BaseModel):
         return kwargs
 
 
+class BudgetConfig(BaseModel):
+    """Limieten in tokens (invoer plus uitvoer). None betekent geen limiet."""
+
+    tokens_per_dag: int | None = None
+    tokens_per_maand: int | None = None
+
+
 class AppConfig(BaseModel):
     """Een app die de harnass mag gebruiken."""
 
@@ -61,6 +76,7 @@ class AppConfig(BaseModel):
     models: list[str]  # namen uit `models`, of ["*"] voor alles
     tools: list[str] = Field(default_factory=list)  # namen van harnass-tools, of ["*"]
     max_tool_rondes: int | None = None  # overschrijft tool_lus.max_rondes
+    budget: BudgetConfig = Field(default_factory=BudgetConfig)
 
     @field_validator("key_sha256")
     @classmethod
@@ -81,8 +97,14 @@ class ToolLusConfig(BaseModel):
     max_rondes: int = 5  # maximaal aantal model -> tool -> model rondes per verzoek
 
 
+class OpslagConfig(BaseModel):
+    # Relatief pad is ten opzichte van de werkmap van de dienst.
+    database: str = "data/olkeharnass.db"
+
+
 class Settings(BaseModel):
     server: ServerConfig = Field(default_factory=ServerConfig)
+    opslag: OpslagConfig = Field(default_factory=OpslagConfig)
     models: dict[str, ModelConfig]
     apps: dict[str, AppConfig]
     tool_lus: ToolLusConfig = Field(default_factory=ToolLusConfig)

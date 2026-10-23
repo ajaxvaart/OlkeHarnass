@@ -4,6 +4,9 @@ server:
   host: 127.0.0.1   # alleen localhost; iets anders wordt geweigerd
   port: 8400
 
+opslag:
+  database: data/olkeharnass.db   # tokenverbruik per app; relatief aan de werkmap
+
 tool_lus:
   max_rondes: 5     # maximaal aantal tool-rondes per verzoek
 
@@ -14,6 +17,8 @@ models:
     api_base: http://127.0.0.1:11434
     extra:
       keep_alive: 5m        # model na 5 minuten uit het geheugen
+    # Ollama-modellen tellen niet mee voor het budget, cloudmodellen wel.
+    # Overschrijven kan met telt_voor_budget: true/false.
   cloud-snel:
     litellm_model: anthropic/claude-haiku-5-5
     api_key_env: ANTHROPIC_API_KEY
@@ -28,6 +33,9 @@ apps:
     key_sha256: "0000000000000000000000000000000000000000000000000000000000000000"
     models: [lokaal-klein, cloud-snel, cloud-sterk]
     tools: [huidige_tijd, rekenen]
+    budget:                 # tokens (invoer + uitvoer) op cloudmodellen
+      tokens_per_dag: 200000
+      tokens_per_maand: 2000000
   dashboard:
     key_sha256: "1111111111111111111111111111111111111111111111111111111111111111"
     models: [lokaal-klein]

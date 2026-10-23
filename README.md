@@ -15,6 +15,7 @@ src/olkeharnass/
   main.py        HTTP-endpoints (FastAPI), app-factory maak_app()
   config.py      YAML-config: server, models, apps, tool_lus
   auth.py        API-keys per app (alleen sha256-hash in config), CLI olkeharnass-key
+  budget.py      tokenverbruik per app in SQLite, limieten per dag en maand
   lus.py         tool-lus model -> tool -> model, doorgeefmodus
   llm.py         aansluiting op LiteLLM (vervangbaar in tests)
   tools/
@@ -65,7 +66,29 @@ print(r.choices[0].message.content)
 - Het antwoord heeft een extra veld `harnass` met het aantal rondes en de uitgevoerde
   tool-calls.
 
-Endpoints: `POST /v1/chat/completions`, `GET /v1/models`, `GET /v1/tools`, `GET /health`.
+Endpoints: `POST /v1/chat/completions`, `GET /v1/models`, `GET /v1/tools`,
+`GET /v1/budget`, `GET /health`.
+
+## Budget per app
+
+Per app kun je een limiet in tokens (invoer plus uitvoer) per dag en per maand zetten:
+
+```yaml
+apps:
+  pa:
+    budget:
+      tokens_per_dag: 200000
+      tokens_per_maand: 2000000
+```
+
+- Het verbruik staat in SQLite (`opslag.database`, standaard `data/olkeharnass.db`).
+- Alleen cloudmodellen tellen mee. Ollama-modellen niet, tenzij je bij dat model
+  `telt_voor_budget: true` zet.
+- De controle gebeurt voor elke modelaanroep, ook binnen de tool-lus. Is het budget
+  op, dan krijgt de app een 429 met `type: budget_exceeded`. Een verzoek kan het budget
+  met hooguit een aanroep overschrijden.
+- Een dag loopt volgens de klok van de laptop; de maand is de kalendermaand.
+- `GET /v1/budget` laat de app zijn eigen verbruik en limieten zien.
 
 ## Een tool toevoegen
 
@@ -105,7 +128,7 @@ LiteLLM-release; draai de tests na elke versie-update.
 
 - Streaming (`stream: true` geeft 400).
 - Harnass-tools en eigen app-tools in een verzoek combineren.
-- Budget of tokenlimiet per app (er wordt wel gelogd: app, model, rondes, tokens).
+- Budget in euro's in plaats van tokens.
 - Embeddings-endpoint.
 - Per-app opslag of gedeelde info tussen apps.
 - MCP-servers als toolbron.

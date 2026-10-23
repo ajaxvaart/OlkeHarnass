@@ -28,9 +28,11 @@ OlkeHarnass: lokale AI-harnass voor Olke's eigen apps. Lees README.md voor gebru
   Tools krijgen een `ToolContext` met de appnaam; gebruik die voor rechten per app.
 - Geheimen nooit in `config/olkeharnass.yaml` of in de repo: cloud-keys via omgevingsvariabelen
   (`api_key_env`), in productie uit `/opt/olkeharnass/.env`.
+- Budget: `budget.py` boekt tokens van cloudmodellen per app per dag in SQLite.
+  Tests gebruiken `opslag.database: ":memory:"`, zodat er geen bestand ontstaat.
 - Foutvorm naar apps is die van OpenAI: `{"error": {"message", "type"}}`.
 
 ## Open punten
 
-Streaming, budget per app, combineren van harnass- en app-tools, embeddings,
+Streaming, budget in euro's in plaats van tokens, combineren van harnass- en app-tools, embeddings,
 gedeelde info tussen apps, MCP als toolbron, welke cloudproviders.
