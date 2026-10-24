@@ -71,15 +71,20 @@ Endpoints: `POST /v1/chat/completions`, `GET /v1/models`, `GET /v1/tools`,
 
 ## Budget per app
 
-Elk cloudmodel krijgt in de config een prijs in euro per miljoen tokens. Daarmee
-rekent de harnass na elke aanroep de kosten uit en boekt die per app per dag:
+Elk cloudmodel krijgt in de config zijn prijs per miljoen tokens, precies zoals op de
+prijspagina van de provider. Na elke aanroep leest de harnass het verbruik dat de
+provider teruggeeft (gewone invoer, cache lezen, cache schrijven en uitvoer apart),
+rekent de kosten uit en boekt ze per app per dag:
 
 ```yaml
+valuta:
+  usd_naar_eur: 0.92          # koers; providers rekenen in dollars af
+
 models:
   cloud-sterk:
     litellm_model: anthropic/claude-sonnet-5-5
     api_key_env: ANTHROPIC_API_KEY
-    prijs: {invoer: 3.00, uitvoer: 15.00}   # euro per miljoen tokens
+    prijs: {valuta: USD, invoer: 3.00, cache_lezen: 0.30, cache_schrijven: 3.75, uitvoer: 15.00}
 
 apps:
   pa:
@@ -88,18 +93,21 @@ apps:
       euro_per_maand: 10.00
 ```
 
-- Een cloudmodel zonder prijs wordt bij het starten geweigerd, zodat het budget nooit
-  stilletjes op nul rekent. Ollama-modellen hebben geen prijs nodig en kosten niets.
-- Het verbruik (tokens en euro's) staat in SQLite (`opslag.database`, standaard
-  `data/olkeharnass.db`). Lokale modellen worden ook geteld, als statistiek.
+- Een cloudmodel zonder prijs wordt bij het starten geweigerd, net als een prijs in
+  dollars zonder koers, zodat het budget nooit stilletjes op nul rekent. Ollama-modellen
+  hebben geen prijs nodig en kosten niets.
+- Zonder `cache_lezen`/`cache_schrijven` rekent de harnass cache-tokens tegen de
+  invoerprijs. Vul ze in voor providers met prompt-caching.
+- Het verbruik (tokens per soort en euro's) staat in SQLite (`opslag.database`,
+  standaard `data/olkeharnass.db`). Lokale modellen worden ook geteld, als statistiek.
 - De controle gebeurt voor elke aanroep van een model dat geld kost, ook binnen de
   tool-lus. Is het budget op, dan krijgt de app een 429 met `type: budget_exceeded`.
   Een verzoek kan het budget met hooguit een aanroep overschrijden. Lokale modellen
   blijven werken.
 - Een dag loopt volgens de klok van de laptop; de maand is de kalendermaand.
-- De berekening is een benadering. Korting door prompt-caching en tarieven die per
-  hoeveelheid verschillen worden niet meegenomen; de echte rekening bij de provider is
-  leidend. Prijzen veranderen: houd ze in de config bij.
+- Wat er nog kan afwijken van de rekening: de wisselkoers van je bank, toeslagen voor
+  zeer lange prompts (sommige modellen boven 200k tokens) en losse kosten zoals
+  webzoeken. Houd prijzen en koers in de config bij.
 - `GET /v1/budget` laat de app zijn eigen kosten, tokens en limieten zien.
 
 ## Een tool toevoegen

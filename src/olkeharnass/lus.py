@@ -15,7 +15,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from .budget import Gebruiksregister, overschreden
+from .budget import Gebruiksregister, Verbruik, bereken_kosten, overschreden
 from .config import AppConfig, ModelConfig, Settings
 from .llm import LLMFunctie
 from .tools import ToolContext, ToolRegistry
@@ -65,20 +65,15 @@ def _actieve_tools(verzoek: dict[str, Any], app: AppConfig, registry: ToolRegist
     return list(gevraagd)
 
 
-def _tokens(antwoord: dict[str, Any]) -> tuple[int, int]:
-    u = antwoord.get("usage") or {}
-    return int(u.get("prompt_tokens") or 0), int(u.get("completion_tokens") or 0)
-
-
 class _BudgetLLM:
     """Wikkelt de LLM-functie: controleert het budget voor en boekt na elke aanroep."""
 
     def __init__(
         self, llm: LLMFunctie, register: Gebruiksregister | None,
-        app_naam: str, app: AppConfig, model: ModelConfig,
+        app_naam: str, app: AppConfig, model: ModelConfig, settings: Settings,
     ) -> None:
         self.llm, self.register, self.app_naam = llm, register, app_naam
-        self.app, self.model = app, model
+        self.app, self.model, self.settings = app, model, settings
 
     async def __call__(self, **kwargs: Any) -> dict[str, Any]:
         if self.register is not None and self.model.kost_geld:
@@ -88,10 +83,9 @@ class _BudgetLLM:
                 raise VerzoekFout(429, fout, "budget_exceeded")
         antwoord = await self.llm(**kwargs)
         if self.register is not None:
-            invoer, uitvoer = _tokens(antwoord)
-            self.register.voeg_toe(
-                self.app_naam, invoer, uitvoer, self.model.kosten(invoer, uitvoer)
-            )
+            verbruik = Verbruik.uit_usage(antwoord.get("usage"))
+            kosten = bereken_kosten(self.model.prijs, verbruik, self.settings)
+            self.register.voeg_toe(self.app_naam, verbruik, kosten)
         return antwoord
 
 
@@ -124,7 +118,7 @@ async def voer_chat_uit(
     if not isinstance(berichten, list) or not berichten:
         raise VerzoekFout(400, "veld `messages` ontbreekt of is leeg")
 
-    llm = _BudgetLLM(llm, register, app_naam, app, model)
+    llm = _BudgetLLM(llm, register, app_naam, app, model, settings)
     kwargs = model.litellm_kwargs()
     kwargs.update({k: verzoek[k] for k in DOORGEEF_PARAMS if k in verzoek})
     berichten = list(berichten)

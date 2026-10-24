@@ -18,7 +18,7 @@ def _client() -> TestClient:
     settings = Settings.model_validate({
         "opslag": {"database": ":memory:"},
         "models": {
-            "nep": {"litellm_model": "openai/gpt-nep", "prijs": {"invoer": 1, "uitvoer": 1},
+            "nep": {"litellm_model": "openai/gpt-nep", "prijs": {"valuta": "EUR", "invoer": 1, "uitvoer": 1},
                     "extra": {
                 "api_key": "x", "mock_response": "hallo vanuit litellm"}},
             "dood": {"litellm_model": "ollama_chat/qwen3:4b",

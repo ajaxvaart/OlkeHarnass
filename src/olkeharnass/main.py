@@ -69,6 +69,8 @@ def maak_app(
                 "kosten_euro": round(p.kosten, 4),
                 "limiet_euro": limiet,
                 "tokens_invoer": p.tokens_invoer,
+                "tokens_cache_lezen": p.tokens_cache_lezen,
+                "tokens_cache_schrijven": p.tokens_cache_schrijven,
                 "tokens_uitvoer": p.tokens_uitvoer,
             }
 

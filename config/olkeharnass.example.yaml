@@ -4,6 +4,9 @@ server:
   host: 127.0.0.1   # alleen localhost; iets anders wordt geweigerd
   port: 8400
 
+valuta:
+  usd_naar_eur: 0.92     # VOORBEELD: zet de actuele koers; providers rekenen in dollars af
+
 opslag:
   database: data/olkeharnass.db   # tokenverbruik per app; relatief aan de werkmap
 
@@ -21,13 +24,14 @@ models:
   cloud-snel:
     litellm_model: anthropic/claude-haiku-5-5
     api_key_env: ANTHROPIC_API_KEY
-    # Euro per miljoen tokens. Verplicht voor cloudmodellen.
-    # VOORBEELDWAARDEN: neem de actuele prijs van de provider over (omgerekend naar euro).
-    prijs: {invoer: 1.00, uitvoer: 5.00}
+    # Prijs per miljoen tokens, verplicht voor cloudmodellen. Neem de bedragen precies
+    # over van de prijspagina van de provider, in dollars; omrekenen doet de harnass.
+    # VOORBEELDWAARDEN: controleer ze.
+    prijs: {valuta: USD, invoer: 1.00, cache_lezen: 0.10, cache_schrijven: 1.25, uitvoer: 5.00}
   cloud-sterk:
     litellm_model: anthropic/claude-sonnet-5-5
     api_key_env: ANTHROPIC_API_KEY
-    prijs: {invoer: 3.00, uitvoer: 15.00}   # VOORBEELD, controleer
+    prijs: {valuta: USD, invoer: 3.00, cache_lezen: 0.30, cache_schrijven: 3.75, uitvoer: 15.00}  # VOORBEELD
 
 # Apps met hun key (alleen de hash) en wat ze mogen.
 # Nieuwe key: olkeharnass-key nieuw <appnaam>

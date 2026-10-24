@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -32,10 +32,18 @@ class ServerConfig(BaseModel):
 
 
 class PrijsConfig(BaseModel):
-    """Prijs in euro per miljoen tokens. Neem de prijs van de provider over."""
+    """Prijs per miljoen tokens, precies zoals op de prijspagina van de provider.
 
+    Cache-tokens hebben bij de meeste providers een eigen prijs (Anthropic: lezen
+    0,1x en schrijven 1,25x de invoerprijs). Zijn ze niet ingevuld, dan rekent de
+    harnass ze tegen de invoerprijs: te hoog bij lezen, te laag bij schrijven.
+    """
+
+    valuta: Literal["USD", "EUR"] = "USD"
     invoer: float = Field(ge=0)
     uitvoer: float = Field(ge=0)
+    cache_lezen: float | None = Field(default=None, ge=0)
+    cache_schrijven: float | None = Field(default=None, ge=0)
 
 
 class ModelConfig(BaseModel):
@@ -67,11 +75,6 @@ class ModelConfig(BaseModel):
     @property
     def kost_geld(self) -> bool:
         return self.prijs is not None and (self.prijs.invoer > 0 or self.prijs.uitvoer > 0)
-
-    def kosten(self, tokens_invoer: int, tokens_uitvoer: int) -> float:
-        if self.prijs is None:
-            return 0.0
-        return (tokens_invoer * self.prijs.invoer + tokens_uitvoer * self.prijs.uitvoer) / 1_000_000
 
     def litellm_kwargs(self) -> dict[str, Any]:
         kwargs: dict[str, Any] = {"model": self.litellm_model, "timeout": self.timeout}
@@ -126,8 +129,15 @@ class OpslagConfig(BaseModel):
     database: str = "data/olkeharnass.db"
 
 
+class ValutaConfig(BaseModel):
+    # Hoeveel euro een dollar kost. Providers rekenen meestal in dollars af;
+    # zet hier de koers die je bank ongeveer hanteert en werk hem af en toe bij.
+    usd_naar_eur: float | None = Field(default=None, gt=0)
+
+
 class Settings(BaseModel):
     server: ServerConfig = Field(default_factory=ServerConfig)
+    valuta: ValutaConfig = Field(default_factory=ValutaConfig)
     opslag: OpslagConfig = Field(default_factory=OpslagConfig)
     models: dict[str, ModelConfig]
     apps: dict[str, AppConfig]
@@ -139,6 +149,11 @@ class Settings(BaseModel):
             for m in app.models:
                 if m != "*" and m not in self.models:
                     raise ValueError(f"app {app_naam!r} verwijst naar onbekend model {m!r}")
+        for naam, m in self.models.items():
+            if m.prijs and m.prijs.valuta == "USD" and self.valuta.usd_naar_eur is None:
+                raise ValueError(
+                    f"model {naam!r} heeft een prijs in USD; zet valuta.usd_naar_eur"
+                )
         hashes = [a.key_sha256 for a in self.apps.values()]
         if len(hashes) != len(set(hashes)):
             raise ValueError("twee apps hebben dezelfde API-key")
