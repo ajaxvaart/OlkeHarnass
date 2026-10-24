@@ -6,6 +6,8 @@ staat: draai de tests na elke versie-update.
 
 from __future__ import annotations
 
+import json
+
 from fastapi.testclient import TestClient
 
 from conftest import PA_KEY, auth
@@ -42,3 +44,16 @@ def test_onbereikbare_ollama_geeft_502():
                        json={"model": "dood", "messages": [{"role": "user", "content": "hoi"}]})
     assert r.status_code == 502
     assert "\n" not in r.json()["error"]["message"]
+
+
+def test_litellm_stream_werkt():
+    r = _client().post("/v1/chat/completions", headers=auth(),
+                       json={"model": "nep", "stream": True,
+                             "messages": [{"role": "user", "content": "hoi"}]})
+    assert r.status_code == 200, r.text
+    regels = [json.loads(x[6:]) for x in r.text.splitlines()
+              if x.startswith("data: ") and x != "data: [DONE]"]
+    tekst = "".join(c["choices"][0]["delta"].get("content") or ""
+                    for c in regels if c.get("choices"))
+    assert tekst == "hallo vanuit litellm"
+    assert regels[-1]["usage"]["total_tokens"] > 0  # include_usage werkt

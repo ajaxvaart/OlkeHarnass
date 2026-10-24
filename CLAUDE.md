@@ -34,9 +34,12 @@ OlkeHarnass: lokale AI-harnass voor Olke's eigen apps. Lees README.md voor gebru
   tokens, USD of EUR, met `valuta.usd_naar_eur`), niet uit de prijstabel van LiteLLM.
   Cloudmodellen zonder prijs worden geweigerd.
   Tests gebruiken `opslag.database: ":memory:"`, zodat er geen bestand ontstaat.
+- De lus (`lus.py`) is een async generator: `voer_chat_uit_stapsgewijs` levert
+  ("delta", chunk) en als laatste ("klaar", LusResultaat). Streaming en niet-streaming
+  gebruiken dezelfde lus; tests vullen `llm_stroom` met `NepLLM.stroom`.
 - Foutvorm naar apps is die van OpenAI: `{"error": {"message", "type"}}`.
 
 ## Open punten
 
-Streaming, combineren van harnass- en app-tools, embeddings,
+Combineren van harnass- en app-tools, embeddings,
 gedeelde info tussen apps, MCP als toolbron, welke cloudproviders.
