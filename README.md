@@ -66,6 +66,13 @@ print(r.choices[0].message.content)
 - Het antwoord heeft een extra veld `harnass` met het aantal rondes en de uitgevoerde
   tool-calls.
 
+Streaming werkt met `stream: true` (server-sent events in OpenAI-formaat), ook met de
+tool-lus: de app krijgt alleen tekst te zien, tool-rondes gebeuren tussendoor. Tekst
+die het model voor een tool-call schrijft komt ook door, gescheiden door een witregel.
+De laatste chunk bevat `usage` en het veld `harnass`. Een fout voordat er tekst is
+(onbekend model, budget op, provider onbereikbaar) is een gewone HTTP-fout; een fout
+halverwege komt als `{"error": ...}`-event, gevolgd door `[DONE]`.
+
 Endpoints: `POST /v1/chat/completions`, `GET /v1/models`, `GET /v1/tools`,
 `GET /v1/budget`, `GET /health`.
 
@@ -146,7 +153,6 @@ LiteLLM-release; draai de tests na elke versie-update.
 
 ## Wat nog niet kan
 
-- Streaming (`stream: true` geeft 400).
 - Harnass-tools en eigen app-tools in een verzoek combineren.
 - Embeddings-endpoint.
 - Per-app opslag of gedeelde info tussen apps.

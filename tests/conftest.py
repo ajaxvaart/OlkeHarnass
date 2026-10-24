@@ -51,6 +51,35 @@ class NepLLM:
             raise AssertionError("NepLLM heeft geen antwoorden meer")
         return self.antwoorden.pop(0)
 
+    async def stroom(self, **kwargs: Any):
+        """Zelfde antwoorden, maar in stukjes zoals een gestreamd model ze stuurt."""
+        for chunk in naar_chunks(await self(**kwargs)):
+            yield chunk
+
+
+def naar_chunks(antwoord: dict[str, Any]) -> list[dict[str, Any]]:
+    basis = {"id": "nep", "object": "chat.completion.chunk", "created": 0, "model": "nep"}
+    bericht = antwoord["choices"][0]["message"]
+    chunks = [{**basis, "choices": [{"index": 0, "finish_reason": None,
+                                     "delta": {"role": "assistant"}}]}]
+    tekst = bericht.get("content") or ""
+    for i in range(0, len(tekst), 3):
+        chunks.append({**basis, "choices": [{"index": 0, "finish_reason": None,
+                                             "delta": {"content": tekst[i:i + 3]}}]})
+    for n, tc in enumerate(bericht.get("tool_calls") or []):
+        args = tc["function"]["arguments"]
+        midden = len(args) // 2
+        chunks.append({**basis, "choices": [{"index": 0, "finish_reason": None, "delta": {
+            "tool_calls": [{"index": n, "id": tc["id"], "type": "function",
+                            "function": {"name": tc["function"]["name"],
+                                         "arguments": args[:midden]}}]}}]})
+        chunks.append({**basis, "choices": [{"index": 0, "finish_reason": None, "delta": {
+            "tool_calls": [{"index": n, "function": {"arguments": args[midden:]}}]}}]})
+    chunks.append({**basis, "choices": [{"index": 0, "delta": {},
+                                         "finish_reason": antwoord["choices"][0]["finish_reason"]}]})
+    chunks.append({**basis, "choices": [], "usage": antwoord["usage"]})
+    return chunks
+
 
 @pytest.fixture
 def settings() -> Settings:
@@ -75,7 +104,7 @@ def settings() -> Settings:
 def maak_client(settings):
     def _maak(antwoorden: list[dict[str, Any]]) -> tuple[TestClient, NepLLM]:
         llm = NepLLM(antwoorden)
-        return TestClient(maak_app(settings, llm=llm)), llm
+        return TestClient(maak_app(settings, llm=llm, llm_stroom=llm.stroom)), llm
     return _maak
 
 

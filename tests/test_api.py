@@ -143,13 +143,6 @@ def test_doorgeefmodus_geeft_tool_calls_terug(maak_client):
     assert len(llm.aanroepen) == 1
 
 
-def test_streaming_nog_niet(maak_client):
-    client, _ = maak_client([])
-    r = client.post("/v1/chat/completions", headers=auth(),
-                    json={"model": "lokaal-klein", "messages": VRAAG, "stream": True})
-    assert r.status_code == 400
-
-
 def test_providerfout_wordt_nette_fout(settings):
     from fastapi.testclient import TestClient
     from olkeharnass.main import maak_app
