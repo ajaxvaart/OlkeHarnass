@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -31,6 +31,21 @@ class ServerConfig(BaseModel):
         return v
 
 
+class PrijsConfig(BaseModel):
+    """Prijs per miljoen tokens, precies zoals op de prijspagina van de provider.
+
+    Cache-tokens hebben bij de meeste providers een eigen prijs (Anthropic: lezen
+    0,1x en schrijven 1,25x de invoerprijs). Zijn ze niet ingevuld, dan rekent de
+    harnass ze tegen de invoerprijs: te hoog bij lezen, te laag bij schrijven.
+    """
+
+    valuta: Literal["USD", "EUR"] = "USD"
+    invoer: float = Field(ge=0)
+    uitvoer: float = Field(ge=0)
+    cache_lezen: float | None = Field(default=None, ge=0)
+    cache_schrijven: float | None = Field(default=None, ge=0)
+
+
 class ModelConfig(BaseModel):
     """Een model zoals apps het kennen, met de LiteLLM-instellingen erachter."""
 
@@ -38,8 +53,28 @@ class ModelConfig(BaseModel):
     api_base: str | None = None
     api_key_env: str | None = None  # naam van de omgevingsvariabele met de key
     timeout: float = 300.0
+    # Verplicht voor cloudmodellen, zodat het budget nooit stilletjes op nul rekent.
+    # Ollama-modellen zijn gratis en hebben geen prijs nodig.
+    prijs: PrijsConfig | None = None
     # Extra parameters die ongewijzigd naar LiteLLM gaan, bijv. keep_alive voor Ollama.
     extra: dict[str, Any] = Field(default_factory=dict)
+
+    @property
+    def is_lokaal(self) -> bool:
+        return self.litellm_model.startswith(("ollama/", "ollama_chat/"))
+
+    @model_validator(mode="after")
+    def cloud_heeft_prijs(self) -> "ModelConfig":
+        if self.prijs is None and not self.is_lokaal:
+            raise ValueError(
+                f"model {self.litellm_model!r} heeft geen prijs; "
+                "zet prijs.invoer en prijs.uitvoer (euro per miljoen tokens)"
+            )
+        return self
+
+    @property
+    def kost_geld(self) -> bool:
+        return self.prijs is not None and (self.prijs.invoer > 0 or self.prijs.uitvoer > 0)
 
     def litellm_kwargs(self) -> dict[str, Any]:
         kwargs: dict[str, Any] = {"model": self.litellm_model, "timeout": self.timeout}
@@ -54,6 +89,13 @@ class ModelConfig(BaseModel):
         return kwargs
 
 
+class BudgetConfig(BaseModel):
+    """Limieten in euro. None betekent geen limiet."""
+
+    euro_per_dag: float | None = Field(default=None, ge=0)
+    euro_per_maand: float | None = Field(default=None, ge=0)
+
+
 class AppConfig(BaseModel):
     """Een app die de harnass mag gebruiken."""
 
@@ -61,6 +103,7 @@ class AppConfig(BaseModel):
     models: list[str]  # namen uit `models`, of ["*"] voor alles
     tools: list[str] = Field(default_factory=list)  # namen van harnass-tools, of ["*"]
     max_tool_rondes: int | None = None  # overschrijft tool_lus.max_rondes
+    budget: BudgetConfig = Field(default_factory=BudgetConfig)
 
     @field_validator("key_sha256")
     @classmethod
@@ -81,8 +124,21 @@ class ToolLusConfig(BaseModel):
     max_rondes: int = 5  # maximaal aantal model -> tool -> model rondes per verzoek
 
 
+class OpslagConfig(BaseModel):
+    # Relatief pad is ten opzichte van de werkmap van de dienst.
+    database: str = "data/olkeharnass.db"
+
+
+class ValutaConfig(BaseModel):
+    # Hoeveel euro een dollar kost. Providers rekenen meestal in dollars af;
+    # zet hier de koers die je bank ongeveer hanteert en werk hem af en toe bij.
+    usd_naar_eur: float | None = Field(default=None, gt=0)
+
+
 class Settings(BaseModel):
     server: ServerConfig = Field(default_factory=ServerConfig)
+    valuta: ValutaConfig = Field(default_factory=ValutaConfig)
+    opslag: OpslagConfig = Field(default_factory=OpslagConfig)
     models: dict[str, ModelConfig]
     apps: dict[str, AppConfig]
     tool_lus: ToolLusConfig = Field(default_factory=ToolLusConfig)
@@ -93,6 +149,11 @@ class Settings(BaseModel):
             for m in app.models:
                 if m != "*" and m not in self.models:
                     raise ValueError(f"app {app_naam!r} verwijst naar onbekend model {m!r}")
+        for naam, m in self.models.items():
+            if m.prijs and m.prijs.valuta == "USD" and self.valuta.usd_naar_eur is None:
+                raise ValueError(
+                    f"model {naam!r} heeft een prijs in USD; zet valuta.usd_naar_eur"
+                )
         hashes = [a.key_sha256 for a in self.apps.values()]
         if len(hashes) != len(set(hashes)):
             raise ValueError("twee apps hebben dezelfde API-key")

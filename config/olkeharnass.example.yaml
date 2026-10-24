@@ -4,6 +4,12 @@ server:
   host: 127.0.0.1   # alleen localhost; iets anders wordt geweigerd
   port: 8400
 
+valuta:
+  usd_naar_eur: 0.92     # VOORBEELD: zet de actuele koers; providers rekenen in dollars af
+
+opslag:
+  database: data/olkeharnass.db   # tokenverbruik per app; relatief aan de werkmap
+
 tool_lus:
   max_rondes: 5     # maximaal aantal tool-rondes per verzoek
 
@@ -14,12 +20,18 @@ models:
     api_base: http://127.0.0.1:11434
     extra:
       keep_alive: 5m        # model na 5 minuten uit het geheugen
+    # Ollama is gratis: geen prijs nodig.
   cloud-snel:
     litellm_model: anthropic/claude-haiku-5-5
     api_key_env: ANTHROPIC_API_KEY
+    # Prijs per miljoen tokens, verplicht voor cloudmodellen. Neem de bedragen precies
+    # over van de prijspagina van de provider, in dollars; omrekenen doet de harnass.
+    # VOORBEELDWAARDEN: controleer ze.
+    prijs: {valuta: USD, invoer: 1.00, cache_lezen: 0.10, cache_schrijven: 1.25, uitvoer: 5.00}
   cloud-sterk:
     litellm_model: anthropic/claude-sonnet-5-5
     api_key_env: ANTHROPIC_API_KEY
+    prijs: {valuta: USD, invoer: 3.00, cache_lezen: 0.30, cache_schrijven: 3.75, uitvoer: 15.00}  # VOORBEELD
 
 # Apps met hun key (alleen de hash) en wat ze mogen.
 # Nieuwe key: olkeharnass-key nieuw <appnaam>
@@ -28,6 +40,9 @@ apps:
     key_sha256: "0000000000000000000000000000000000000000000000000000000000000000"
     models: [lokaal-klein, cloud-snel, cloud-sterk]
     tools: [huidige_tijd, rekenen]
+    budget:                 # in euro; alleen cloudmodellen kosten geld
+      euro_per_dag: 1.00
+      euro_per_maand: 10.00
   dashboard:
     key_sha256: "1111111111111111111111111111111111111111111111111111111111111111"
     models: [lokaal-klein]

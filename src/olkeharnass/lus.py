@@ -15,7 +15,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from .config import AppConfig, Settings
+from .budget import Gebruiksregister, Verbruik, bereken_kosten, overschreden
+from .config import AppConfig, ModelConfig, Settings
 from .llm import LLMFunctie
 from .tools import ToolContext, ToolRegistry
 
@@ -37,10 +38,11 @@ DOORGEEF_PARAMS = (
 
 
 class VerzoekFout(Exception):
-    def __init__(self, status: int, bericht: str) -> None:
+    def __init__(self, status: int, bericht: str, soort: str = "invalid_request_error") -> None:
         super().__init__(bericht)
         self.status = status
         self.bericht = bericht
+        self.soort = soort
 
 
 @dataclass
@@ -63,6 +65,30 @@ def _actieve_tools(verzoek: dict[str, Any], app: AppConfig, registry: ToolRegist
     return list(gevraagd)
 
 
+class _BudgetLLM:
+    """Wikkelt de LLM-functie: controleert het budget voor en boekt na elke aanroep."""
+
+    def __init__(
+        self, llm: LLMFunctie, register: Gebruiksregister | None,
+        app_naam: str, app: AppConfig, model: ModelConfig, settings: Settings,
+    ) -> None:
+        self.llm, self.register, self.app_naam = llm, register, app_naam
+        self.app, self.model, self.settings = app, model, settings
+
+    async def __call__(self, **kwargs: Any) -> dict[str, Any]:
+        if self.register is not None and self.model.kost_geld:
+            fout = overschreden(self.app, self.register.gebruik(self.app_naam))
+            if fout:
+                log.warning("app=%s %s", self.app_naam, fout)
+                raise VerzoekFout(429, fout, "budget_exceeded")
+        antwoord = await self.llm(**kwargs)
+        if self.register is not None:
+            verbruik = Verbruik.uit_usage(antwoord.get("usage"))
+            kosten = bereken_kosten(self.model.prijs, verbruik, self.settings)
+            self.register.voeg_toe(self.app_naam, verbruik, kosten)
+        return antwoord
+
+
 def _tel_usage(totaal: dict[str, int], antwoord: dict[str, Any]) -> None:
     for k, v in (antwoord.get("usage") or {}).items():
         if isinstance(v, int):
@@ -76,6 +102,7 @@ async def voer_chat_uit(
     settings: Settings,
     registry: ToolRegistry,
     llm: LLMFunctie,
+    register: Gebruiksregister | None = None,
 ) -> LusResultaat:
     model_naam = verzoek.get("model")
     if not isinstance(model_naam, str) or not model_naam:
@@ -91,6 +118,7 @@ async def voer_chat_uit(
     if not isinstance(berichten, list) or not berichten:
         raise VerzoekFout(400, "veld `messages` ontbreekt of is leeg")
 
+    llm = _BudgetLLM(llm, register, app_naam, app, model, settings)
     kwargs = model.litellm_kwargs()
     kwargs.update({k: verzoek[k] for k in DOORGEEF_PARAMS if k in verzoek})
     berichten = list(berichten)

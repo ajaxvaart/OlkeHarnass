@@ -55,10 +55,12 @@ class NepLLM:
 @pytest.fixture
 def settings() -> Settings:
     return Settings.model_validate({
+        "opslag": {"database": ":memory:"},
         "models": {
             "lokaal-klein": {"litellm_model": "ollama_chat/qwen3:4b",
                              "api_base": "http://127.0.0.1:11434"},
-            "cloud-sterk": {"litellm_model": "anthropic/claude-sonnet-5-5"},
+            "cloud-sterk": {"litellm_model": "anthropic/claude-sonnet-5-5",
+                            "prijs": {"valuta": "EUR", "invoer": 3.0, "uitvoer": 15.0}},
         },
         "apps": {
             "pa": {"key_sha256": hash_key(PA_KEY), "models": ["*"],

@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 
 from . import __version__
 from .auth import app_uit_verzoek
+from .budget import Gebruiksregister
 from .config import AppConfig, Settings, laad_settings
 from .llm import LLMFunctie, litellm_completion
 from .lus import VerzoekFout, voer_chat_uit
@@ -29,9 +30,11 @@ def maak_app(
     settings: Settings | None = None,
     llm: LLMFunctie = litellm_completion,
     registry: ToolRegistry = standaard_registry,
+    register: Gebruiksregister | None = None,
 ) -> FastAPI:
     api = FastAPI(title="OlkeHarnass", version=__version__)
     api.state.settings = settings or laad_settings()
+    api.state.register = register or Gebruiksregister(api.state.settings.opslag.database)
     api.state.llm = llm
     api.state.registry = registry
 
@@ -55,6 +58,28 @@ def maak_app(
         reg: ToolRegistry = api.state.registry
         return {"data": [reg.get(n).openai_schema() for n in reg.namen() if app.mag_tool(n)]}
 
+    @api.get("/v1/budget")
+    async def budget(app_info: tuple[str, AppConfig] = Depends(app_uit_verzoek)) -> dict:
+        """Geen OpenAI-endpoint: verbruik en limieten van deze app."""
+        app_naam, app = app_info
+        g = api.state.register.gebruik(app_naam)
+
+        def periode(p, limiet):
+            return {
+                "kosten_euro": round(p.kosten, 4),
+                "limiet_euro": limiet,
+                "tokens_invoer": p.tokens_invoer,
+                "tokens_cache_lezen": p.tokens_cache_lezen,
+                "tokens_cache_schrijven": p.tokens_cache_schrijven,
+                "tokens_uitvoer": p.tokens_uitvoer,
+            }
+
+        return {
+            "app": app_naam,
+            "dag": periode(g.dag, app.budget.euro_per_dag),
+            "maand": periode(g.maand, app.budget.euro_per_maand),
+        }
+
     @api.post("/v1/chat/completions")
     async def chat(
         request: Request, app_info: tuple[str, AppConfig] = Depends(app_uit_verzoek)
@@ -70,10 +95,11 @@ def maak_app(
         start = time.monotonic()
         try:
             res = await voer_chat_uit(
-                verzoek, app_naam, app, api.state.settings, api.state.registry, api.state.llm
+                verzoek, app_naam, app, api.state.settings, api.state.registry,
+                api.state.llm, api.state.register,
             )
         except VerzoekFout as e:
-            return _fout(e.status, e.bericht)
+            return _fout(e.status, e.bericht, e.soort)
         except Exception as e:  # fout bij de provider of in LiteLLM
             # 4xx van de provider (bijv. 429 rate limit, 401 foute cloud-key) doorgeven,
             # al het andere is een 502: de harnass zelf werkt, de upstream niet.
