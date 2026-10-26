@@ -66,10 +66,10 @@ eigendom van root, alleen leesbaar voor root (systemd leest het bij het starten)
 ```bash
 sudo install -m 600 -o root -g root /dev/null /opt/olkeharnass/.env
 {
-  echo "SONARR_API_KEY=$(grep -oP '(?<=<ApiKey>)[^<]+' ~/docker/media/sonarr/config.xml)"
-  echo "RADARR_API_KEY=$(grep -oP '(?<=<ApiKey>)[^<]+' ~/docker/media/radarr/config.xml)"
-  echo "PROWLARR_API_KEY=$(grep -oP '(?<=<ApiKey>)[^<]+' ~/docker/media/prowlarr/config.xml)"
-  echo "SABNZBD_API_KEY=$(grep -oP '^api_key = \K.+' ~/docker/media/sabnzbd/sabnzbd.ini)"
+  echo "SONARR_API_KEY=$(grep -oP '(?<=<ApiKey>)[^<]+' /srv/docker/sonarr/config.xml)"
+  echo "RADARR_API_KEY=$(grep -oP '(?<=<ApiKey>)[^<]+' /srv/docker/radarr/config.xml)"
+  echo "PROWLARR_API_KEY=$(grep -oP '(?<=<ApiKey>)[^<]+' /srv/docker/prowlarr/config.xml)"
+  echo "SABNZBD_API_KEY=$(grep -oP '^api_key = \K.+' /srv/docker/sabnzbd/sabnzbd.ini)"
 } | sudo tee /opt/olkeharnass/.env > /dev/null
 sudo grep -c '=.' /opt/olkeharnass/.env     # verwacht: 4
 ```
@@ -95,7 +95,7 @@ systemctl status olkeharnass --no-pager
 curl -s http://127.0.0.1:8400/health
 ```
 
-Bij een fout: `journalctl -u olkeharnass -n 50 --no-pager`.
+Bij een fout: `sudo journalctl -u olkeharnass -n 50 --no-pager` (auke zit niet in de groep systemd-journal). Het logboek lezen: `sudo tail -n 5 /opt/olkeharnass/data/acties.jsonl` (data/ is alleen van de dienst).
 
 ## 7. Proef vanaf de server
 
