@@ -20,13 +20,23 @@ src/olkeharnass/
   llm.py         aansluiting op LiteLLM (vervangbaar in tests)
   tools/
     registry.py  @tool-decorator, ToolRegistry, ToolContext
-    ingebouwd/   voorbeeldtools: huidige_tijd, rekenen
+    acties.py    @actie-decorator: tools die iets veranderen, alleen als voorstel
+    ingebouwd/   huidige_tijd, rekenen, server (bord, Docker, *arr, SABnzbd, Prometheus)
+  assistent/     de assistent voor het bord: /api/assistent/send, /decide, /pending
+    voorstellen.py  voorstellen in SQLite, precies een keer uitvoeren
+    toegang.py      Cloudflare Access-token controleren
+    meldingen.py    logboek (jsonl) en ntfy
 config/olkeharnass.example.yaml
-deploy/olkeharnass.service   systemd-unit
+deploy/olkeharnass.service   systemd-unit (eigen gebruiker olkeharnass)
+deploy/socket-proxy/         Docker-socket-proxy: alleen lezen en herstarten
+docs/installatie-assistent.md  installatie op apulinux, met terugdraaien
 tests/
 ```
 
 ## Installeren (Linux)
+
+Op apulinux, met de assistent: volg [docs/installatie-assistent.md](docs/installatie-assistent.md).
+Kort, zonder de assistent:
 
 ```bash
 sudo mkdir -p /opt/olkeharnass && sudo chown $USER /opt/olkeharnass
@@ -36,7 +46,7 @@ cp config/olkeharnass.example.yaml config/olkeharnass.yaml
 .venv/bin/olkeharnass-key nieuw pa          # zet de hash in config/olkeharnass.yaml
 echo 'ANTHROPIC_API_KEY=...' > .env && chmod 600 .env
 .venv/bin/olkeharnass                       # handmatig starten, of:
-sudo cp deploy/olkeharnass.service /etc/systemd/system/   # pas User= aan
+sudo cp deploy/olkeharnass.service /etc/systemd/system/   # User=olkeharnass, zie docs
 sudo systemctl daemon-reload && sudo systemctl enable --now olkeharnass
 ```
 
@@ -117,6 +127,35 @@ apps:
   webzoeken. Houd prijzen en koers in de config bij.
 - `GET /v1/budget` laat de app zijn eigen kosten, tokens en limieten zien.
 
+## Assistent voor het bord
+
+Het tabblad Assistent in OlkeDashboard praat via Caddy (`/api/assistent/*`, zelfde
+origin, geen key in de browser) met de harnass. De assistent gebruikt het lokale model
+(`qwen3:4b-instruct-2507` op de GTX 1050) en de tools van de app in `assistent.app`.
+
+- `POST /api/assistent/send` `{text, conversation?}` -> `{text, proposals, conversation}`.
+  Het gesprek blijft in het geheugen van de harnass (weg na een herstart).
+- `POST /api/assistent/decide` `{id, approved}` -> `{ok, output}`.
+- `GET /api/assistent/pending` -> open voorstellen `[{id, title, cmd, why, risk}]`.
+
+Regels:
+
+- Uitlezen mag de assistent zelf. Iets veranderen kan alleen via een actie (`@actie`):
+  het model zet dan een voorstel klaar en hoort dat het nog niet is uitgevoerd.
+- De harnass voert een voorstel pas uit na `decide` met `approved: true`, met een geldig
+  Cloudflare Access-token (kop `Cf-Access-Jwt-Assertion`: handtekening, AUD, uitgever,
+  vervaltijd en e-mail op de lijst). Thuis (zonder Access) kan toestaan dus niet;
+  chatten en weigeren wel als `lan_mag_chatten: true`.
+- Precies een keer: de overgang open -> bezig is atomair; een voorstel dat bezig,
+  uitgevoerd, mislukt, geweigerd of verlopen is, gaat nooit (meer) uit.
+- POST-verzoeken moeten de kop `X-Bord-Assistent: 1` hebben (tegen CSRF).
+- Elk besluit komt in `assistent.logboek` (jsonl) en geeft een ntfy-melding.
+- Geen shell, geen sudo, geen reboot. Docker alleen via de socket-proxy (lezen en
+  herstarten), containers en logs alleen uit de lijsten in `server_tools`.
+
+Een actie toevoegen: zie het voorbeeld bovenin `tools/acties.py`. Het argumentenmodel
+heeft altijd een veld `reden`; de functie controleert zelf nog eens alles.
+
 ## Een tool toevoegen
 
 1. Maak `src/olkeharnass/tools/ingebouwd/<naam>.py`:
@@ -157,3 +196,5 @@ LiteLLM-release; draai de tests na elke versie-update.
 - Embeddings-endpoint.
 - Per-app opslag of gedeelde info tussen apps.
 - MCP-servers als toolbron.
+- Reboot als actie (vraagt sudo; bewust nog niet).
+- Getest tegen de echte apps en Ollama op apulinux: nog niet, alleen tegen nagebootste API's.

@@ -6,8 +6,10 @@ import json
 import logging
 import time
 import uuid
+from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator
 
+import httpx
 from fastapi import Depends, FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
@@ -17,7 +19,7 @@ from .budget import Gebruiksregister
 from .config import AppConfig, Settings, laad_settings
 from .llm import LLMFunctie, LLMStroomFunctie, litellm_completion, litellm_stroom
 from .lus import LusResultaat, VerzoekFout, voer_chat_uit, voer_chat_uit_stapsgewijs
-from .tools import ToolRegistry
+from .tools import ToolContext, ToolRegistry
 from .tools import registry as standaard_registry
 
 log = logging.getLogger("olkeharnass")
@@ -57,9 +59,20 @@ def maak_app(
     llm_stroom: LLMStroomFunctie = litellm_stroom,
     registry: ToolRegistry = standaard_registry,
     register: Gebruiksregister | None = None,
+    http_transport: httpx.AsyncBaseTransport | None = None,
+    toegang: Any = None,
 ) -> FastAPI:
-    api = FastAPI(title="OlkeHarnass", version=__version__)
+    """`http_transport` en `toegang` (Cloudflare-controle) zijn er voor de tests."""
+
+    @asynccontextmanager
+    async def levensloop(api: FastAPI):
+        yield
+        await api.state.http.aclose()
+
+    api = FastAPI(title="OlkeHarnass", version=__version__, lifespan=levensloop)
     api.state.settings = settings or laad_settings()
+    # Voor de server-tools en ntfy. Geen proxy uit de omgeving: alles is localhost.
+    api.state.http = httpx.AsyncClient(transport=http_transport, trust_env=False)
     api.state.register = register or Gebruiksregister(api.state.settings.opslag.database)
     api.state.llm = llm
     api.state.llm_stroom = llm_stroom
@@ -122,10 +135,12 @@ def maak_app(
         start = time.monotonic()
         args = (verzoek, app_naam, app, api.state.settings, api.state.registry,
                 api.state.llm, api.state.register)
+        ctx = ToolContext(app=app_naam, diensten=api.state.settings.server_tools,
+                          http=api.state.http)
         if verzoek.get("stream"):
-            return await _stream(args, app_naam, verzoek.get("model"), start)
+            return await _stream(args, ctx, app_naam, verzoek.get("model"), start)
         try:
-            res = await voer_chat_uit(*args)
+            res = await voer_chat_uit(*args, tool_ctx=ctx)
         except VerzoekFout as e:
             return _fout(e.status, e.bericht, e.soort)
         except Exception as e:  # fout bij de provider of in LiteLLM
@@ -137,13 +152,14 @@ def maak_app(
         res.antwoord["harnass"] = {"rondes": res.rondes, "tool_calls": res.tool_calls}
         return res.antwoord
 
-    async def _stream(args: tuple, app_naam: str, model: Any, start: float) -> Any:
+    async def _stream(args: tuple, ctx: ToolContext, app_naam: str, model: Any,
+                      start: float) -> Any:
         """Server-sent events in OpenAI-formaat.
 
         Fouten voor de eerste tekst (onbekend model, budget op, provider onbereikbaar)
         worden een gewone HTTP-fout. Fouten daarna komen als `error`-event in de stroom.
         """
-        gen = voer_chat_uit_stapsgewijs(*args, llm_stroom=api.state.llm_stroom)
+        gen = voer_chat_uit_stapsgewijs(*args, llm_stroom=api.state.llm_stroom, tool_ctx=ctx)
         stroom_id = f"chatcmpl-{uuid.uuid4().hex}"
         aangemaakt = int(time.time())
 
@@ -193,6 +209,12 @@ def maak_app(
             yield _sse("[DONE]")
 
         return StreamingResponse(events(), media_type="text/event-stream")
+
+    if api.state.settings.assistent is not None:
+        from .assistent import Assistent, maak_router
+
+        api.state.assistent = Assistent(api, toegang=toegang)
+        api.include_router(maak_router(api.state.assistent))
 
     return api
 

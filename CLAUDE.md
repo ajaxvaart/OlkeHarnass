@@ -38,8 +38,18 @@ OlkeHarnass: lokale AI-harnass voor Olke's eigen apps. Lees README.md voor gebru
   ("delta", chunk) en als laatste ("klaar", LusResultaat). Streaming en niet-streaming
   gebruiken dezelfde lus; tests vullen `llm_stroom` met `NepLLM.stroom`.
 - Foutvorm naar apps is die van OpenAI: `{"error": {"message", "type"}}`.
+- Assistent voor het bord (`assistent/`): iets veranderen gaat alleen via `@actie`
+  (tools/acties.py), nooit via een gewone `@tool`. Uitvoeren alleen na `decide` met een
+  geldig Cloudflare Access-token; elk besluit naar logboek en ntfy. Geen shell, geen
+  sudo, geen Docker-socket (alleen de socket-proxy). Eisen staan in OlkeDashboard
+  `docs/assistent-en-veiligheid.md`; niet versoepelen zonder Olke.
+- Server-tools (`tools/ingebouwd/server.py`) praten alleen HTTP met localhost via
+  `ctx.http`; tests gebruiken `httpx.MockTransport` (`maak_app(..., http_transport=...)`).
+  Uitvoer kort houden (klein model) en door `maskeer()` halen.
+- Op apulinux draait de dienst als gebruiker `olkeharnass` (niet in docker/sudo).
+  Installatie en terugdraaien: `docs/installatie-assistent.md`.
 
 ## Open punten
 
-Combineren van harnass- en app-tools, embeddings,
+Reboot-actie (sudo), combineren van harnass- en app-tools, embeddings,
 gedeelde info tussen apps, MCP als toolbron, welke cloudproviders.

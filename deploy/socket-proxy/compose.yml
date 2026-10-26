@@ -1,0 +1,34 @@
+# Docker-socket-proxy voor OlkeHarnass.
+#
+# De harnass krijgt nooit de Docker-socket zelf: wie daarbij kan, is in de praktijk
+# root (en op deze machine draait ook Vaultwarden). Deze proxy laat alleen door:
+# containers en logs lezen (CONTAINERS=1) en stop/herstart (ALLOW_RESTARTS=1).
+# Al het andere (exec, images, volumes, nieuwe containers, ...) geeft 403.
+#
+# Let op: lezen omvat ook /containers/<naam>/json, met de omgevingsvariabelen van
+# containers. Daarom luistert de proxy alleen op 127.0.0.1: elk proces op deze
+# laptop kan erbij, niets daarbuiten en geen andere container.
+#
+# Starten:   docker compose -f /opt/olkeharnass/deploy/socket-proxy/compose.yml up -d
+# Stoppen:   docker compose -f /opt/olkeharnass/deploy/socket-proxy/compose.yml down
+services:
+  socket-proxy:
+    image: lscr.io/linuxserver/socket-proxy:3.4.7
+    container_name: olkeharnass-socket-proxy
+    environment:
+      - CONTAINERS=1
+      - ALLOW_RESTARTS=1
+      - POST=0
+      - PING=1
+      - VERSION=1
+      - EVENTS=0
+      - LOG_LEVEL=warning
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    ports:
+      - "127.0.0.1:2375:2375"
+    read_only: true
+    tmpfs:
+      - /run
+    mem_limit: 64m
+    restart: unless-stopped

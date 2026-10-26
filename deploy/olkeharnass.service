@@ -1,18 +1,18 @@
-# Installeren:
-#   sudo cp deploy/olkeharnass.service /etc/systemd/system/
-#   sudo systemctl daemon-reload && sudo systemctl enable --now olkeharnass
+# Installeren: zie docs/installatie-assistent.md
 # Logs: journalctl -u olkeharnass -f
 [Unit]
 Description=OlkeHarnass
-After=network-online.target ollama.service
+After=network-online.target ollama.service docker.service
 Wants=ollama.service
 
 [Service]
 Type=simple
-User=olke
+# Eigen gebruiker zonder shell, niet in de groepen docker of sudo.
+User=olkeharnass
+Group=olkeharnass
 WorkingDirectory=/opt/olkeharnass
 Environment=OLKEHARNASS_CONFIG=/opt/olkeharnass/config/olkeharnass.yaml
-# Cloud-keys hier, niet in de config. Rechten: chmod 600.
+# API-keys hier, niet in de config. Eigenaar root, chmod 600: systemd leest het.
 EnvironmentFile=-/opt/olkeharnass/.env
 ExecStart=/opt/olkeharnass/.venv/bin/olkeharnass
 Restart=on-failure
@@ -20,10 +20,18 @@ RestartSec=5
 # Beperk de schade als er iets misgaat
 MemoryMax=600M
 NoNewPrivileges=true
+CapabilityBoundingSet=
 ProtectSystem=strict
-ProtectHome=read-only
-ReadWritePaths=/opt/olkeharnass
+ProtectHome=true
+ReadWritePaths=/opt/olkeharnass/data
 PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=true
 
 [Install]
 WantedBy=multi-user.target

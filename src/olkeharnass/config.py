@@ -135,8 +135,65 @@ class ValutaConfig(BaseModel):
     usd_naar_eur: float | None = Field(default=None, gt=0)
 
 
+class DienstConfig(BaseModel):
+    """Een app op de server met een HTTP-API, zoals Sonarr of SABnzbd."""
+
+    url: str
+    key_env: str | None = None  # omgevingsvariabele met de API-key
+
+    def key(self) -> str | None:
+        return os.environ.get(self.key_env) if self.key_env else None
+
+
+class ServerToolsConfig(BaseModel):
+    """Waar de server-tools hun gegevens vandaan halen. Alles alleen op localhost."""
+
+    # Docker via een socket-proxy die alleen lezen en herstarten doorlaat,
+    # nooit de Docker-socket zelf (wie bij de socket kan, is in de praktijk root).
+    docker_url: str = "http://127.0.0.1:2375"
+    bord_status_url: str = "http://127.0.0.1:8099/status.json"
+    prometheus_url: str = "http://127.0.0.1:9090"
+    containers_logs: list[str] = Field(default_factory=list)  # logs mogen gelezen worden
+    containers_herstarten: list[str] = Field(default_factory=list)  # mogen herstart worden
+    diensten: dict[str, DienstConfig] = Field(default_factory=dict)  # sonarr, radarr, ...
+    timeout: float = 15.0
+
+
+class CloudflareConfig(BaseModel):
+    """Cloudflare Access: alleen verzoeken met een geldig Access-token mogen acties uitvoeren."""
+
+    team_domein: str  # bijv. "olke.cloudflareaccess.com"
+    aud: str  # Application Audience (AUD) tag van de Access-applicatie
+    emails: list[str]  # wie acties mag goedkeuren
+
+
+class NtfyConfig(BaseModel):
+    url: str = "https://ntfy.sh"
+    topic: str
+    token_env: str | None = None
+
+
+class AssistentConfig(BaseModel):
+    """De assistent voor het bord: /api/assistent/send, /decide en /pending."""
+
+    app: str  # naam uit `apps`; diens modellen en tools gelden voor de assistent
+    model: str
+    cloudflare: CloudflareConfig | None = None  # zonder: toestaan altijd geweigerd
+    # Op het thuisnetwerk is er geen Cloudflare Access. Met true mag je daar chatten
+    # en voorstellen zien en weigeren; toestaan kan alleen met een geldig Access-token.
+    lan_mag_chatten: bool = False
+    ntfy: NtfyConfig | None = None
+    logboek: str = "data/acties.jsonl"
+    voorstel_geldig_minuten: int = Field(default=60, ge=1)
+    max_berichten: int = Field(default=12, ge=0)  # zoveel eerdere berichten gaan mee
+    # Cloudflare breekt een verzoek na 100 seconden af; blijf daaronder.
+    antwoord_timeout: float = Field(default=90.0, gt=0)
+
+
 class Settings(BaseModel):
     server: ServerConfig = Field(default_factory=ServerConfig)
+    server_tools: ServerToolsConfig | None = None
+    assistent: AssistentConfig | None = None
     valuta: ValutaConfig = Field(default_factory=ValutaConfig)
     opslag: OpslagConfig = Field(default_factory=OpslagConfig)
     models: dict[str, ModelConfig]
@@ -154,6 +211,12 @@ class Settings(BaseModel):
                 raise ValueError(
                     f"model {naam!r} heeft een prijs in USD; zet valuta.usd_naar_eur"
                 )
+        if self.assistent:
+            a = self.apps.get(self.assistent.app)
+            if a is None:
+                raise ValueError(f"assistent.app {self.assistent.app!r} staat niet in apps")
+            if self.assistent.model not in self.models or not a.mag_model(self.assistent.model):
+                raise ValueError(f"assistent.model {self.assistent.model!r} is onbekend of niet toegestaan")
         hashes = [a.key_sha256 for a in self.apps.values()]
         if len(hashes) != len(set(hashes)):
             raise ValueError("twee apps hebben dezelfde API-key")
