@@ -27,9 +27,17 @@ from pydantic import BaseModel, ValidationError
 
 @dataclass(frozen=True)
 class ToolContext:
-    """Wat een tool weet over het verzoek. Later uit te breiden met per-app opslag."""
+    """Wat een tool weet over het verzoek.
+
+    `diensten` en `http` zijn nodig voor de server-tools. `stel_voor` is er alleen
+    in de assistent van het bord: daarmee zet een actie-tool een voorstel klaar
+    dat Olke moet goedkeuren. Zonder `stel_voor` kan een actie niet voorgesteld worden.
+    """
 
     app: str
+    diensten: Any = None  # ServerToolsConfig
+    http: Any = None  # httpx.AsyncClient
+    stel_voor: Callable[..., Awaitable[dict[str, Any]]] | None = None
 
 
 ToolFunctie = Callable[[Any, ToolContext], Awaitable[Any]]

@@ -199,6 +199,7 @@ async def voer_chat_uit_stapsgewijs(
     llm: LLMFunctie,
     register: Gebruiksregister | None = None,
     llm_stroom: LLMStroomFunctie | None = None,
+    tool_ctx: ToolContext | None = None,
 ) -> AsyncIterator[Gebeurtenis]:
     """De lus als generator. Met `llm_stroom` wordt er gestreamd."""
     model_naam = verzoek.get("model")
@@ -235,7 +236,7 @@ async def voer_chat_uit_stapsgewijs(
     tool_namen = _actieve_tools(verzoek, app, registry)
     schemas = [registry.get(n).openai_schema() for n in tool_namen]  # type: ignore[union-attr]
     max_rondes = app.max_tool_rondes or settings.tool_lus.max_rondes
-    ctx = ToolContext(app=app_naam)
+    ctx = tool_ctx or ToolContext(app=app_naam)
     usage: dict[str, int] = {}
     uitgevoerd: list[dict[str, Any]] = []
     tekst_gestreamd = False

@@ -11,10 +11,13 @@ dependencies = [
     "litellm==1.105.3",
     "pydantic==2.14.1",
     "PyYAML==6.0.3",
+    "httpx==0.28.1",
+    "PyJWT[crypto]==2.15.1",
+    "cryptography==50.0.2",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest==9.1.1", "httpx==0.28.1"]
+dev = ["pytest==9.1.1"]
 
 [project.scripts]
 olkeharnass = "olkeharnass.main:run"

@@ -15,6 +15,15 @@ tool_lus:
 
 # Modellen zoals apps ze kennen. De app geeft de naam links op als `model`.
 models:
+  lokaal-assistent:
+    # Beste keuze voor de GTX 1050 (4 GB): past met 8k context helemaal op de GPU
+    # en kan goed met tools overweg. 7-8B past niet en valt terug op de trage CPU.
+    litellm_model: ollama_chat/qwen3:4b-instruct-2507-q4_K_M
+    api_base: http://127.0.0.1:11434
+    timeout: 80
+    extra:
+      num_ctx: 8192         # genoeg voor de tools en een kort gesprek; meer past niet in 4 GB
+      keep_alive: 10m       # daarna uit het geheugen, de GPU gaat terug in rust
   lokaal-klein:
     litellm_model: ollama_chat/qwen3:4b
     api_base: http://127.0.0.1:11434
@@ -48,3 +57,42 @@ apps:
     models: [lokaal-klein]
     tools: [huidige_tijd]
     max_tool_rondes: 2
+  bord:
+    # De assistent in het bord gebruikt deze app voor model en tools. Het bord zelf
+    # stuurt geen key (die zou in de browser staan); maak er toch een, zodat de hash
+    # uniek is: olkeharnass-key nieuw bord
+    key_sha256: "2222222222222222222222222222222222222222222222222222222222222222"
+    models: [lokaal-assistent]
+    tools: [huidige_tijd, bord_status, containers, container_logs, prometheus, arr_status,
+            sabnzbd_status, herstart_container, zoek_ontbrekend, test_indexers,
+            sabnzbd_pauzeer, sabnzbd_hervat, sabnzbd_opnieuw]
+    max_tool_rondes: 4
+
+# Waar de server-tools hun gegevens halen. Alles op localhost.
+server_tools:
+  docker_url: http://127.0.0.1:2375                   # socket-proxy, zie deploy/socket-proxy
+  bord_status_url: http://127.0.0.1:8099/status.json
+  prometheus_url: http://127.0.0.1:9090
+  containers_logs: [sonarr, radarr, prowlarr, bazarr, sabnzbd, seerr, jellyfin]
+  containers_herstarten: [sonarr, radarr, prowlarr, bazarr, sabnzbd, seerr]
+  diensten:                                           # keys in /opt/olkeharnass/.env
+    sonarr: {url: "http://127.0.0.1:8989", key_env: SONARR_API_KEY}
+    radarr: {url: "http://127.0.0.1:7878", key_env: RADARR_API_KEY}
+    prowlarr: {url: "http://127.0.0.1:9696", key_env: PROWLARR_API_KEY}
+    sabnzbd: {url: "http://127.0.0.1:8080", key_env: SABNZBD_API_KEY}
+
+# De assistent in het bord (/api/assistent/*, via Caddy).
+assistent:
+  app: bord
+  model: lokaal-assistent
+  cloudflare:                       # zonder dit blok kan niemand acties toestaan
+    team_domein: JOUWTEAM.cloudflareaccess.com
+    aud: "AUD-TAG-VAN-DE-ACCESS-APPLICATIE"
+    emails: [jouw@adres.nl]
+  lan_mag_chatten: true             # thuis: chatten en weigeren; toestaan alleen via Access
+  ntfy:
+    url: https://ntfy.sh
+    topic: apulinux-olkesolutions
+    # token_env: NTFY_TOKEN
+  logboek: data/acties.jsonl
+  voorstel_geldig_minuten: 60
