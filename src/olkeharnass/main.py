@@ -183,7 +183,9 @@ def maak_app(
             try:
                 while True:
                     soort, data = gebeurtenis
-                    if soort == "delta":
+                    if soort == "tool":
+                        pass  # alleen voor de assistent; apps krijgen alleen tekst
+                    elif soort == "delta":
                         yield _sse({**data, "id": stroom_id, "created": aangemaakt,
                                     "model": model})
                     else:
