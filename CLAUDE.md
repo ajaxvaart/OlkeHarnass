@@ -41,7 +41,9 @@ OlkeHarnass: lokale AI-harnass voor Olke's eigen apps. Lees README.md voor gebru
 - Assistent voor het bord (`assistent/`): iets veranderen gaat alleen via `@actie`
   (tools/acties.py), nooit via een gewone `@tool`. Uitvoeren alleen na `decide` met een
   geldig Cloudflare Access-token; elk besluit naar logboek en ntfy. Geen shell, geen
-  sudo, geen Docker-socket (alleen de socket-proxy). Eisen staan in OlkeDashboard
+  sudo, geen Docker-socket (alleen de socket-proxy). Systeemacties (Ollama, server
+  herstarten) via vaste commando's en de polkit-regel in `deploy/polkit/`; een nieuwe
+  systeemactie vraagt ook een aanpassing van die regel. Eisen staan in OlkeDashboard
   `docs/assistent-en-veiligheid.md`; niet versoepelen zonder Olke.
 - Server-tools (`tools/ingebouwd/server.py`) praten alleen HTTP met localhost via
   `ctx.http`; tests gebruiken `httpx.MockTransport` (`maak_app(..., http_transport=...)`).
@@ -51,5 +53,5 @@ OlkeHarnass: lokale AI-harnass voor Olke's eigen apps. Lees README.md voor gebru
 
 ## Open punten
 
-Reboot-actie (sudo), combineren van harnass- en app-tools, embeddings,
+Combineren van harnass- en app-tools, embeddings,
 gedeelde info tussen apps, MCP als toolbron, welke cloudproviders.

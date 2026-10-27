@@ -67,7 +67,8 @@ apps:
     models: [lokaal-assistent]
     tools: [huidige_tijd, bord_status, containers, container_logs, prometheus, arr_status,
             sabnzbd_status, herstart_container, zoek_ontbrekend, test_indexers,
-            sabnzbd_pauzeer, sabnzbd_hervat, sabnzbd_opnieuw]
+            sabnzbd_pauzeer, sabnzbd_hervat, sabnzbd_opnieuw,
+            updates, herstart_ollama, herstart_server]   # laatste twee: polkit-regel nodig
     max_tool_rondes: 4
 
 # Waar de server-tools hun gegevens halen. Alles op localhost.

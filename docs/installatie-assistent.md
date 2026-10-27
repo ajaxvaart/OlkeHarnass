@@ -121,6 +121,23 @@ Zet beide in `config/olkeharnass.yaml` en herstart: `sudo systemctl restart olke
 
 Daarna de bord-kant (Caddy-route en `assistent.js`) uit de PR in OlkeDashboard uitrollen.
 
+## 9. Systeemacties (Ollama en server herstarten)
+
+Optioneel. De dienst draait met `NoNewPrivileges`, dus sudo kan niet. In plaats daarvan
+krijgt de gebruiker `olkeharnass` via polkit precies twee rechten: `ollama.service`
+herstarten en de server herstarten.
+
+```bash
+dpkg -s polkitd > /dev/null && echo polkit-ok     # anders: sudo apt install -y polkitd
+sudo install -m 644 /opt/olkeharnass/deploy/polkit/50-olkeharnass.rules /etc/polkit-1/rules.d/
+```
+
+Zet `updates`, `herstart_ollama` en `herstart_server` bij `apps.bord.tools` in de config en
+herstart de dienst. Een herstart van de server gebeurt een minuut na Toestaan; afbreken
+kan met `sudo shutdown -c`.
+
+Terugdraaien: `sudo rm /etc/polkit-1/rules.d/50-olkeharnass.rules`.
+
 ## Terugdraaien
 
 Elke stap los, in omgekeerde volgorde:
@@ -143,7 +160,8 @@ config en herstart. Acties tijdelijk onmogelijk maken: haal het blok `cloudflare
 - Voorstellen (pas na Toestaan in het bord, via Cloudflare Access): container herstarten
   (alleen die in `containers_herstarten`), ontbrekende items zoeken, indexers testen,
   SABnzbd pauzeren/hervatten, mislukte download opnieuw.
-- Niet: shell, sudo, reboot, bestanden, Docker exec, iets buiten deze lijst. Een reboot
-  vraagt sudo; die zit er bewust niet in.
+- Systeem: updates bekijken (lezen), Ollama herstarten (middel) en de server herstarten
+  (hoog, een minuut na toestemming). Dat mag via de polkit-regel hieronder, niet via sudo.
+- Niet: shell, sudo, bestanden, Docker exec, apt install/upgrade, iets buiten deze lijst.
 - Elk besluit (voorgesteld, toegestaan, geweigerd, mislukt, toestaan zonder Access)
   komt in `data/acties.jsonl`; de besluiten geven ook een ntfy-melding.
