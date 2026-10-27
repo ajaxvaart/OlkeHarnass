@@ -1,0 +1,20 @@
+// OlkeHarnass: wat de dienstgebruiker olkeharnass via systemd/logind mag.
+// Alleen Ollama herstarten en de server herstarten (ook als er iemand is ingelogd).
+// Geen andere diensten, geen stop/start, niet negeren van inhibitors.
+// Installeren: sudo install -m 644 deploy/polkit/50-olkeharnass.rules /etc/polkit-1/rules.d/
+// Terugdraaien: sudo rm /etc/polkit-1/rules.d/50-olkeharnass.rules
+polkit.addRule(function (action, subject) {
+    if (subject.user !== "olkeharnass") {
+        return polkit.Result.NOT_HANDLED;
+    }
+    if (action.id === "org.freedesktop.systemd1.manage-units" &&
+        action.lookup("unit") === "ollama.service" &&
+        action.lookup("verb") === "restart") {
+        return polkit.Result.YES;
+    }
+    if (action.id === "org.freedesktop.login1.reboot" ||
+        action.id === "org.freedesktop.login1.reboot-multiple-sessions") {
+        return polkit.Result.YES;
+    }
+    return polkit.Result.NOT_HANDLED;
+});

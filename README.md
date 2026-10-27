@@ -150,8 +150,11 @@ Regels:
   uitgevoerd, mislukt, geweigerd of verlopen is, gaat nooit (meer) uit.
 - POST-verzoeken moeten de kop `X-Bord-Assistent: 1` hebben (tegen CSRF).
 - Elk besluit komt in `assistent.logboek` (jsonl) en geeft een ntfy-melding.
-- Geen shell, geen sudo, geen reboot. Docker alleen via de socket-proxy (lezen en
-  herstarten), containers en logs alleen uit de lijsten in `server_tools`.
+- Geen shell en geen sudo. Docker alleen via de socket-proxy (lezen en herstarten),
+  containers en logs alleen uit de lijsten in `server_tools`.
+- Ollama en de server herstarten gaat met vaste `systemctl`/`shutdown`-commando's; de
+  rechten komen uit een polkit-regel (`deploy/polkit/`) die de gebruiker `olkeharnass`
+  precies dat toestaat. De server herstart een minuut na toestemming (risico hoog).
 
 Een actie toevoegen: zie het voorbeeld bovenin `tools/acties.py`. Het argumentenmodel
 heeft altijd een veld `reden`; de functie controleert zelf nog eens alles.
@@ -196,5 +199,4 @@ LiteLLM-release; draai de tests na elke versie-update.
 - Embeddings-endpoint.
 - Per-app opslag of gedeelde info tussen apps.
 - MCP-servers als toolbron.
-- Reboot als actie (vraagt sudo; bewust nog niet).
 - Getest tegen de echte apps en Ollama op apulinux: nog niet, alleen tegen nagebootste API's.

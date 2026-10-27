@@ -10,7 +10,9 @@ context) en geheimen in logregels worden gemaskeerd.
 
 from __future__ import annotations
 
+import asyncio
 import json
+import os
 import re
 from typing import Any, Literal
 
@@ -19,7 +21,7 @@ from pydantic import BaseModel, Field
 from ..acties import actie
 from ..registry import ToolContext, tool
 
-MAX_TEKENS = 3000
+MAX_TEKENS = 2000  # num_ctx is 4096 tokens; tools en prompt nemen er al ~2000
 
 
 class ServerFout(Exception):
@@ -327,3 +329,73 @@ async def sabnzbd_opnieuw(args: OpnieuwArgs, ctx: ToolContext) -> str:
     await _get(ctx, f"{url}/api", params={"mode": "retry", "value": args.id, "output": "json",
                                           "apikey": key or ""})
     return f"download {args.id} staat weer in de wachtrij"
+
+
+# --- systeem: vaste systemctl-commando's, rechten via polkit (zie deploy/polkit) ---
+#
+# Geen sudo: de dienst draait met NoNewPrivileges. systemctl vraagt via D-Bus aan
+# systemd/logind of het mag, en de polkit-regel staat de gebruiker olkeharnass
+# alleen deze commando's toe. De argumenten liggen hier vast; het model kiest niets.
+
+REBOOT_VERTRAGING = "+1"  # minuten: tijd voor logboek en ntfy, en om af te breken
+REBOOT_NODIG = "/run/reboot-required"
+
+
+async def voer_commando_uit(*argv: str, timeout: float = 30.0) -> tuple[int, str]:
+    """Draait een vast commando zonder shell. Apart, zodat tests het kunnen vervangen."""
+    proc = await asyncio.create_subprocess_exec(
+        *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+    try:
+        uit, _ = await asyncio.wait_for(proc.communicate(), timeout)
+    except asyncio.TimeoutError:
+        proc.kill()
+        raise ServerFout(f"{argv[0]} duurde langer dan {int(timeout)} s")
+    return proc.returncode or 0, uit.decode("utf-8", "replace").strip()
+
+
+async def _systemctl(*args: str) -> str:
+    code, uit = await voer_commando_uit("systemctl", "--no-ask-password", *args)
+    if code != 0:
+        raise ServerFout(f"systemctl {' '.join(args)} mislukte ({code}): {kort(uit, 300)}")
+    return uit
+
+
+@tool("updates", "Welke systeemupdates (apt) klaarstaan en of een herstart van de server nodig is.")
+async def updates(args: GeenArgs, ctx: ToolContext) -> Any:
+    async def doe():
+        code, uit = await voer_commando_uit("apt", "list", "--upgradable", timeout=60)
+        if code != 0:
+            raise ServerFout(f"apt list mislukte ({code})")
+        regels = [r for r in uit.splitlines() if "/" in r and "[" in r]
+        return {
+            "aantal": len(regels),
+            "pakketten": [r.split("/")[0] for r in regels][:40],
+            "herstart_nodig": os.path.exists(REBOOT_NODIG),
+            "let_op": "lijst is zo vers als de laatste apt update op de server",
+        }
+    return await _veilig(doe)
+
+
+@actie("herstart_ollama", "Herstart Ollama (het lokale model). Het gesprek stopt even.",
+       risico="middel", titel=lambda a: "Ollama herstarten",
+       cmd=lambda a: "systemctl restart ollama")
+async def herstart_ollama(args: RedenArgs, ctx: ToolContext) -> str:
+    await _systemctl("restart", "ollama.service")
+    return "Ollama is herstart"
+
+
+@actie("herstart_server", "Herstart de hele server. Alle apps zijn een paar minuten weg.",
+       risico="hoog", titel=lambda a: "Server herstarten",
+       cmd=lambda a: f"shutdown -r {REBOOT_VERTRAGING}")
+async def herstart_server(args: RedenArgs, ctx: ToolContext) -> str:
+    await voer_shutdown()
+    return ("Server herstart over 1 minuut. Afbreken kan in de terminal met "
+            "sudo shutdown -c")
+
+
+async def voer_shutdown() -> None:
+    # shutdown plant via logind; dezelfde polkit-actie als reboot.
+    code, uit = await voer_commando_uit("shutdown", "-r", REBOOT_VERTRAGING,
+                                        "OlkeHarnass: herstart na toestemming van Olke")
+    if code != 0:
+        raise ServerFout(f"shutdown mislukte ({code}): {kort(uit, 300)}")

@@ -88,3 +88,57 @@ def test_elke_actie_heeft_reden_en_risico():
     for a in acties.values():
         assert "reden" in a.args_model.model_fields
         assert a.risico in ("laag", "middel", "hoog")
+
+
+# --- systeemacties (systemctl via polkit) ---
+
+class NepCommando:
+    def __init__(self, code: int = 0, uit: str = "") -> None:
+        self.code, self.uit, self.aanroepen = code, uit, []
+
+    async def __call__(self, *argv, timeout=30.0):
+        self.aanroepen.append(list(argv))
+        return self.code, self.uit
+
+
+def test_updates_telt_pakketten(monkeypatch):
+    from olkeharnass.tools.ingebouwd import server
+    nep = NepCommando(uit="Listing...\nlibc6/stable 2.41-12 amd64 [upgradable from: 2.41-11]\n"
+                          "openssl/stable 3.5.4 amd64 [upgradable from: 3.5.3]\n")
+    monkeypatch.setattr(server, "voer_commando_uit", nep)
+    monkeypatch.setattr(server, "REBOOT_NODIG", "/bestaat/niet")
+    uit = json.loads(draai("updates", {}, ctx(NepServer())))
+    assert uit["aantal"] == 2 and uit["pakketten"] == ["libc6", "openssl"]
+    assert uit["herstart_nodig"] is False
+    assert nep.aanroepen == [["apt", "list", "--upgradable"]]
+
+
+def test_systeemacties_hebben_vaste_argumenten_en_risico(monkeypatch):
+    from olkeharnass.tools.acties import acties
+    from olkeharnass.tools.ingebouwd import server
+    assert acties["herstart_server"].risico == "hoog"
+    assert acties["herstart_ollama"].risico == "middel"
+    nep = NepCommando()
+    monkeypatch.setattr(server, "voer_commando_uit", nep)
+    args = server.RedenArgs(reden="test")
+    c = ctx(NepServer())
+    assert "herstart" in asyncio.run(acties["herstart_ollama"].uitvoer(args, c))
+    assert "1 minuut" in asyncio.run(acties["herstart_server"].uitvoer(args, c))
+    assert nep.aanroepen == [
+        ["systemctl", "--no-ask-password", "restart", "ollama.service"],
+        ["shutdown", "-r", "+1", "OlkeHarnass: herstart na toestemming van Olke"],
+    ]
+
+
+def test_systemctl_fout_wordt_serverfout(monkeypatch):
+    from olkeharnass.tools.ingebouwd import server
+    monkeypatch.setattr(server, "voer_commando_uit", NepCommando(1, "Access denied"))
+    import pytest
+    with pytest.raises(server.ServerFout, match="Access denied"):
+        asyncio.run(server.herstart_ollama(server.RedenArgs(reden="x"), ctx(NepServer())))
+
+
+def test_echt_commando_zonder_shell():
+    from olkeharnass.tools.ingebouwd import server
+    code, uit = asyncio.run(server.voer_commando_uit("echo", "a;b"))
+    assert (code, uit) == (0, "a;b")
