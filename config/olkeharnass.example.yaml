@@ -16,13 +16,15 @@ tool_lus:
 # Modellen zoals apps ze kennen. De app geeft de naam links op als `model`.
 models:
   lokaal-assistent:
-    # Beste keuze voor de GTX 1050 (4 GB): past met 8k context helemaal op de GPU
+    # Beste keuze voor de GTX 1050 (4 GB): past met 4k context helemaal op de GPU
     # en kan goed met tools overweg. 7-8B past niet en valt terug op de trage CPU.
     litellm_model: ollama_chat/qwen3:4b-instruct-2507-q4_K_M
     api_base: http://127.0.0.1:11434
     timeout: 80
     extra:
-      num_ctx: 8192         # genoeg voor de tools en een kort gesprek; meer past niet in 4 GB
+      # Gemeten op apulinux (GTX 1050, 4 GB): bij 8192 en 6144 draait 14-20% op de CPU,
+      # bij 4096 staat alles op de GPU (3,2 GB) en werken tools en voorstellen nog.
+      num_ctx: 4096
       keep_alive: 10m       # daarna uit het geheugen, de GPU gaat terug in rust
   lokaal-klein:
     litellm_model: ollama_chat/qwen3:4b
