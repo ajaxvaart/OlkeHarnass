@@ -95,7 +95,7 @@ systemctl status olkeharnass --no-pager
 curl -s http://127.0.0.1:8400/health
 ```
 
-Bij een fout: `journalctl -u olkeharnass -n 50 --no-pager`.
+Bij een fout: `sudo journalctl -u olkeharnass -n 50 --no-pager` (auke zit niet in de groep systemd-journal). Het logboek lezen: `sudo tail -n 5 /opt/olkeharnass/data/acties.jsonl` (data/ is alleen van de dienst).
 
 ## 7. Proef vanaf de server
 
