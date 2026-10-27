@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 
@@ -105,7 +106,8 @@ def opzet(tmp_path):
         server = NepServer()
         llm = NepLLM(antwoorden)
         toegang = CloudflareToegang(s.assistent.cloudflare, sleutels=NepSleutels())
-        app = maak_app(s, llm=llm, http_transport=httpx.MockTransport(server), toegang=toegang)
+        app = maak_app(s, llm=llm, llm_stroom=llm.stroom, http_transport=httpx.MockTransport(server),
+                       toegang=toegang)
         return TestClient(app), llm, server, tmp_path / "acties.jsonl"
     return _maak
 
@@ -286,3 +288,63 @@ def test_cloudflare_controle_los():
 def test_config_assistent_moet_bestaande_app_hebben(tmp_path):
     with pytest.raises(ValueError, match="assistent.app"):
         maak_settings(tmp_path, app="bestaat-niet")
+
+
+# --- live meekijken (stream) ---
+
+def lees_events(r) -> list[dict]:
+    return [json.loads(regel[6:]) for regel in r.text.splitlines() if regel.startswith("data: ")]
+
+
+def test_stream_toont_stappen_tekst_en_resultaat(opzet):
+    client, _, server, _ = opzet([
+        tool_antwoord("container_logs", {"naam": "radarr"}),
+        tool_antwoord("herstart_container", {"naam": "radarr", "reden": "traag"}, "call_2"),
+        tekst_antwoord("Herstart van radarr staat klaar.")])
+    r = client.post("/api/assistent/send", headers=BORD,
+                    json={"text": "radarr is traag", "stream": True})
+    assert r.status_code == 200 and r.headers["content-type"].startswith("text/event-stream")
+    events = lees_events(r)
+    soorten = [e["type"] for e in events]
+    assert soorten[:4] == ["stap", "stap_klaar", "stap", "stap_klaar"]
+    assert events[0]["tekst"] == "Logs van radarr lezen" and events[1]["ok"] is True
+    assert events[2]["tekst"] == "Voorstel klaarzetten: herstart_container"
+    tekst = "".join(e["delta"] for e in events if e["type"] == "tekst")
+    assert tekst == "Herstart van radarr staat klaar."
+    klaar = events[-1]
+    assert klaar["type"] == "klaar" and klaar["text"] == tekst
+    assert [p["title"] for p in klaar["proposals"]] == ["radarr herstarten"]
+    assert server.aanroepen("/restart") == 0
+    # Geen tooluitvoer naar de browser, dus ook geen gemaskeerde logregels.
+    assert "geheim" not in r.text and "ERROR" not in r.text
+
+
+def test_stream_mislukte_stap_en_modelfout(opzet):
+    client, _, _, _ = opzet([tool_antwoord("container_logs", {"naam": "vaultwarden"})])
+    events = lees_events(client.post("/api/assistent/send", headers=BORD,
+                                     json={"text": "logs", "stream": True}))
+    assert events[1] == {"type": "stap_klaar", "ok": False, "ms": events[1]["ms"]}
+    assert events[-1]["type"] == "klaar" and "fout" in events[-1]["text"]
+
+
+def test_stream_time_out_geeft_klaar(opzet):
+    client, _, _, _ = opzet([], antwoord_timeout=0.2)
+
+    async def traag(**kwargs):
+        await asyncio.sleep(5)
+        yield {}
+
+    client.app.state.llm_stroom = traag
+    events = lees_events(client.post("/api/assistent/send", headers=BORD,
+                                     json={"text": "hoi", "stream": True}))
+    assert events[-1]["type"] == "klaar" and "te lang" in events[-1]["text"]
+
+
+def test_stap_label_gemaskeerd_en_kort():
+    from olkeharnass.assistent.router import stap_label
+    assert stap_label("bord_status", "{}") == "Bord-status lezen"
+    assert stap_label("arr_status", '{"app": "sonarr"}') == "sonarr bekijken"
+    assert stap_label("container_logs", "geen json") == "Logs lezen"
+    assert "abc" not in stap_label("prometheus", '{"query": "x{apikey=\\"abc\\"}"}')
+    assert len(stap_label("prometheus", '{"query": "' + "up + " * 100 + '"}')) == 80
+    assert stap_label("onbekend", "{}") == "onbekend"

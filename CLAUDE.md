@@ -35,7 +35,10 @@ OlkeHarnass: lokale AI-harnass voor Olke's eigen apps. Lees README.md voor gebru
   Cloudmodellen zonder prijs worden geweigerd.
   Tests gebruiken `opslag.database: ":memory:"`, zodat er geen bestand ontstaat.
 - De lus (`lus.py`) is een async generator: `voer_chat_uit_stapsgewijs` levert
-  ("delta", chunk) en als laatste ("klaar", LusResultaat). Streaming en niet-streaming
+  ("delta", chunk), ("tool", {fase, naam, ...}) rond elke tool en als laatste ("klaar",
+  LusResultaat). De HTTP-stream voor apps slaat "tool" over; de assistent maakt er
+  live stappen van voor het bord (`send` met `stream: true`, SSE). Naar de browser
+  gaan alleen een kort gemaskeerd label per stap, nooit tooluitvoer. Streaming en niet-streaming
   gebruiken dezelfde lus; tests vullen `llm_stroom` met `NepLLM.stroom`.
 - Foutvorm naar apps is die van OpenAI: `{"error": {"message", "type"}}`.
 - Assistent voor het bord (`assistent/`): iets veranderen gaat alleen via `@actie`

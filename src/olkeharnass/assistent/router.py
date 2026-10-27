@@ -12,16 +12,18 @@ kan die kop niet meesturen zonder CORS-toestemming, en die geven we niet.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import secrets
 import time
 from collections import OrderedDict
+from collections.abc import AsyncIterator
 from typing import Any
 
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
-from ..lus import VerzoekFout, voer_chat_uit
+from ..lus import VerzoekFout, voer_chat_uit_stapsgewijs
 from ..tools.acties import Actie, acties as alle_acties
 from ..tools.registry import ToolContext
 from .meldingen import Logboek, Ntfy
@@ -50,6 +52,41 @@ Alleen een actie-tool maakt een voorstel. Is er geen tool voor, of weigert de to
 zeg dan dat je het niet kunt voorstellen.
 - Je hebt geen shell en geen sudo. Kan iets alleen zo, leg dan uit wat Olke zelf \
 in de terminal kan doen."""
+
+
+# Wat het bord live laat zien per tool. Alleen naam en een kort argument, nooit de uitvoer.
+# Per tool: (met argument, zonder als het argument ontbreekt).
+STAP_LABELS = {
+    "bord_status": ("Bord-status lezen", ""),
+    "containers": ("Containers bekijken", ""),
+    "container_logs": ("Logs van {naam} lezen", "Logs lezen"),
+    "prometheus": ("Prometheus: {query}", "Prometheus bevragen"),
+    "arr_status": ("{app} bekijken", "Sonarr/Radarr/Prowlarr bekijken"),
+    "sabnzbd_status": ("SABnzbd bekijken", ""),
+    "updates": ("Updates opzoeken", ""),
+}
+MAX_STAP = 80
+
+
+def stap_label(naam: str, ruwe_args: str) -> str:
+    """Korte Nederlandse omschrijving van een toolaanroep, gemaskeerd."""
+    from ..tools.ingebouwd.server import maskeer
+    try:
+        args = json.loads(ruwe_args or "{}")
+    except ValueError:
+        args = {}
+    if not isinstance(args, dict):
+        args = {}
+    if naam in alle_acties:
+        tekst = f"Voorstel klaarzetten: {naam}"
+    else:
+        sjabloon, kaal = STAP_LABELS.get(naam, (naam, ""))
+        try:
+            tekst = sjabloon.format(**{k: str(v) for k, v in args.items()})
+        except (KeyError, IndexError, ValueError):
+            tekst = kaal or naam
+    tekst = maskeer(" ".join(tekst.split()))
+    return tekst if len(tekst) <= MAX_STAP else tekst[:MAX_STAP - 1] + "…"
 
 
 def _fout(status: int, bericht: str) -> JSONResponse:
@@ -95,6 +132,19 @@ class Assistent:
     # --- chatten ---
 
     async def send(self, tekst: str, gesprek_id: str | None, wie: str) -> dict[str, Any]:
+        """Zonder live meekijken: alleen het eindresultaat."""
+        async for e in self.send_stapsgewijs(tekst, gesprek_id, wie, live=False):
+            if e["type"] == "klaar":
+                return {k: v for k, v in e.items() if k != "type"}
+        raise AssertionError("assistent eindigde zonder resultaat")
+
+    async def send_stapsgewijs(self, tekst: str, gesprek_id: str | None, wie: str,
+                               live: bool = True) -> AsyncIterator[dict[str, Any]]:
+        """Levert events voor het bord: "stap", "stap_klaar", "tekst" en als laatste "klaar".
+
+        Met `live` wordt het model gestreamd, zodat de tekst al verschijnt terwijl
+        hij geschreven wordt. Wachten op de beurt telt mee voor de time-out.
+        """
         if gesprek_id not in self.gesprekken:
             gesprek_id = secrets.token_urlsafe(9)
             self.gesprekken[gesprek_id] = []
@@ -120,16 +170,40 @@ class Assistent:
         berichten.append({"role": "user", "content": tekst})
         verzoek = {"model": self.cfg.model, "messages": berichten, "temperature": 0.3}
         st = self.api.state
+        eind = time.monotonic() + self.cfg.antwoord_timeout
 
-        async def draai() -> Any:
-            async with self.bezig:
-                return await voer_chat_uit(verzoek, self.cfg.app, self.app, self.settings,
-                                           st.registry, st.llm, st.register,
-                                           tool_ctx=self._ctx(stel_voor))
+        def rest() -> float:
+            return max(0.0, eind - time.monotonic())
 
+        antwoord = ""
         try:
-            res = await asyncio.wait_for(draai(), self.cfg.antwoord_timeout)
-            antwoord = (res.antwoord["choices"][0]["message"].get("content") or "").strip()
+            await asyncio.wait_for(self.bezig.acquire(), rest())
+            try:
+                gen = voer_chat_uit_stapsgewijs(
+                    verzoek, self.cfg.app, self.app, self.settings, st.registry, st.llm,
+                    st.register, llm_stroom=st.llm_stroom if live else None,
+                    tool_ctx=self._ctx(stel_voor))
+                try:
+                    while True:
+                        try:
+                            soort, data = await asyncio.wait_for(gen.__anext__(), rest())
+                        except StopAsyncIteration:
+                            break
+                        if soort == "tool" and data["fase"] == "start":
+                            yield {"type": "stap", "tekst": stap_label(data["naam"], data["arguments"])}
+                        elif soort == "tool":
+                            yield {"type": "stap_klaar", "ok": data["ok"], "ms": data["duur_ms"]}
+                        elif soort == "delta":
+                            stuk = data["choices"][0]["delta"].get("content")
+                            if stuk:
+                                yield {"type": "tekst", "delta": stuk}
+                        elif soort == "klaar":
+                            antwoord = (data.antwoord["choices"][0]["message"].get("content")
+                                        or "").strip()
+                finally:
+                    await gen.aclose()
+            finally:
+                self.bezig.release()
             antwoord = antwoord or "(geen antwoord van het model)"
         except asyncio.TimeoutError:
             antwoord = ("Dat duurde te lang; ik ben gestopt. Probeer een kortere of "
@@ -146,8 +220,8 @@ class Assistent:
         geschiedenis += [{"role": "user", "content": tekst},
                          {"role": "assistant", "content": onthouden}]
         del geschiedenis[:-MAX_GESCHIEDENIS]
-        return {"text": antwoord, "proposals": [v.voor_bord() for v in nieuw],
-                "conversation": gesprek_id}
+        yield {"type": "klaar", "text": antwoord, "proposals": [v.voor_bord() for v in nieuw],
+               "conversation": gesprek_id}
 
     # --- besluiten ---
 
@@ -234,7 +308,17 @@ def maak_router(assistent: Assistent) -> APIRouter:
         if len(tekst) > MAX_TEKST:
             return _fout(400, f"bericht te lang (max {MAX_TEKST} tekens)")
         gesprek = body.get("conversation")
-        return await assistent.send(tekst.strip(), gesprek if isinstance(gesprek, str) else None, wie)
+        gesprek = gesprek if isinstance(gesprek, str) else None
+        if body.get("stream") is not True:
+            return await assistent.send(tekst.strip(), gesprek, wie)
+
+        async def events() -> AsyncIterator[str]:
+            async for e in assistent.send_stapsgewijs(tekst.strip(), gesprek, wie):
+                yield f"data: {json.dumps(e, ensure_ascii=False)}\n\n"
+
+        # no-transform/X-Accel-Buffering: proxy's (Caddy, Cloudflare) niet laten bufferen.
+        return StreamingResponse(events(), media_type="text/event-stream", headers={
+            "Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no"})
 
     @router.post("/decide")
     async def decide(request: Request) -> Any:

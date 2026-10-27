@@ -293,6 +293,8 @@ async def voer_chat_uit_stapsgewijs(
             naam = tc["function"]["name"]
             ruwe_args = tc["function"].get("arguments") or "{}"
             t = registry.get(naam) if naam in tool_namen else None
+            # Voor wie live wil meekijken (de assistent in het bord); de HTTP-stream negeert dit.
+            yield ("tool", {"fase": "start", "naam": naam, "arguments": ruwe_args})
             start = time.monotonic()
             if t is None:
                 uitkomst = f'{{"fout": "onbekende tool {naam}"}}'
@@ -300,6 +302,8 @@ async def voer_chat_uit_stapsgewijs(
                 uitkomst = await t.voer_uit(ruwe_args, ctx)
             duur_ms = int((time.monotonic() - start) * 1000)
             log.info("app=%s tool=%s ronde=%d duur_ms=%d", app_naam, naam, ronde + 1, duur_ms)
+            yield ("tool", {"fase": "klaar", "naam": naam, "duur_ms": duur_ms,
+                            "ok": not uitkomst.startswith('{"fout"')})
             uitgevoerd.append({"tool": naam, "arguments": ruwe_args, "ronde": ronde + 1})
             berichten.append({"role": "tool", "tool_call_id": tc["id"], "content": uitkomst})
 
