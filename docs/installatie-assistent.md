@@ -66,10 +66,10 @@ eigendom van root, alleen leesbaar voor root (systemd leest het bij het starten)
 ```bash
 sudo install -m 600 -o root -g root /dev/null /opt/olkeharnass/.env
 {
-  echo "SONARR_API_KEY=$(grep -oP '(?<=<ApiKey>)[^<]+' ~/docker/media/sonarr/config.xml)"
-  echo "RADARR_API_KEY=$(grep -oP '(?<=<ApiKey>)[^<]+' ~/docker/media/radarr/config.xml)"
-  echo "PROWLARR_API_KEY=$(grep -oP '(?<=<ApiKey>)[^<]+' ~/docker/media/prowlarr/config.xml)"
-  echo "SABNZBD_API_KEY=$(grep -oP '^api_key = \K.+' ~/docker/media/sabnzbd/sabnzbd.ini)"
+  echo "SONARR_API_KEY=$(grep -oP '(?<=<ApiKey>)[^<]+' /srv/docker/sonarr/config.xml)"
+  echo "RADARR_API_KEY=$(grep -oP '(?<=<ApiKey>)[^<]+' /srv/docker/radarr/config.xml)"
+  echo "PROWLARR_API_KEY=$(grep -oP '(?<=<ApiKey>)[^<]+' /srv/docker/prowlarr/config.xml)"
+  echo "SABNZBD_API_KEY=$(grep -oP '^api_key = \K.+' /srv/docker/sabnzbd/sabnzbd.ini)"
 } | sudo tee /opt/olkeharnass/.env > /dev/null
 sudo grep -c '=.' /opt/olkeharnass/.env     # verwacht: 4
 ```
