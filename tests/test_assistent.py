@@ -196,7 +196,7 @@ def test_toestaan_voert_precies_een_keer_uit(opzet):
     client, _, server, log = opzet(HERSTART)
     p = stel_herstart_voor(client)["proposals"][0]
     r = client.post("/api/assistent/decide", headers=access(), json={"id": p["id"], "approved": True})
-    assert r.json() == {"ok": True, "output": "radarr is herstart"}
+    assert r.json()["ok"] is True and r.json()["output"] == "radarr is herstart"
     assert server.aanroepen("/containers/radarr/restart") == 1
     nog_eens = client.post("/api/assistent/decide", headers=access(),
                            json={"id": p["id"], "approved": True})
@@ -348,3 +348,76 @@ def test_stap_label_gemaskeerd_en_kort():
     assert "abc" not in stap_label("prometheus", '{"query": "x{apikey=\\"abc\\"}"}')
     assert len(stap_label("prometheus", '{"query": "' + "up + " * 100 + '"}')) == 80
     assert stap_label("onbekend", "{}") == "onbekend"
+
+
+# --- gesprek bewaren en vervolg na een besluit ---
+
+def test_gesprek_overleeft_herstart(tmp_path):
+    s = maak_settings(tmp_path)
+    s.opslag.database = str(tmp_path / "harnass.db")
+
+    def client(antwoorden):
+        llm = NepLLM(antwoorden)
+        return TestClient(maak_app(s, llm=llm, llm_stroom=llm.stroom,
+                                   http_transport=httpx.MockTransport(NepServer()))), llm
+
+    eerste, _ = client([tool_antwoord("bord_status", {}), tekst_antwoord("Radarr is geel.")])
+    g = eerste.post("/api/assistent/send", headers=BORD,
+                    json={"text": "hoe gaat het?", "stream": True}).text
+    # Na een herstart van de dienst: zelfde gesprek, met de stappen erbij.
+    tweede, llm = client([tekst_antwoord("Nog steeds geel.")])
+    uit = tweede.get("/api/assistent/conversation").json()
+    assert [m["who"] for m in uit["messages"]] == ["me", "steps", "bot"]
+    assert uit["messages"][1]["steps"][0] == {"tekst": "Bord-status lezen", "ok": True,
+                                              "ms": uit["messages"][1]["steps"][0]["ms"]}
+    tweede.post("/api/assistent/send", headers=BORD,
+                json={"text": "en nu?", "conversation": uit["conversation"]})
+    inhoud = [m["content"] for m in llm.aanroepen[0]["messages"][1:]]
+    assert inhoud == ["hoe gaat het?", "Radarr is geel.", "en nu?"]
+    assert "klaar" in g
+
+
+def test_nieuw_gesprek(opzet):
+    client, llm, _, _ = opzet([tekst_antwoord("Een."), tekst_antwoord("Twee.")])
+    client.post("/api/assistent/send", headers=BORD, json={"text": "een"})
+    nieuw = client.post("/api/assistent/new", headers=BORD).json()["conversation"]
+    assert client.get("/api/assistent/conversation").json() == {"conversation": nieuw, "messages": []}
+    client.post("/api/assistent/send", headers=BORD, json={"text": "twee", "conversation": nieuw})
+    assert [m["content"] for m in llm.aanroepen[1]["messages"][1:]] == ["twee"]
+
+
+def test_toestaan_komt_in_gesprek_met_een_vervolg(opzet):
+    client, llm, server, _ = opzet(HERSTART + [
+        tool_antwoord("containers", {}), tekst_antwoord("Radarr draait weer en is healthy.")])
+    uit = stel_herstart_voor(client)
+    p = uit["proposals"][0]
+    r = client.post("/api/assistent/decide", headers=access(), json={"id": p["id"], "approved": True}).json()
+    assert r["followUp"] is True and r["conversation"] == uit["conversation"]
+    v = client.post("/api/assistent/send", headers=BORD, json={"followUp": p["id"]}).json()
+    assert v["text"] == "Radarr draait weer en is healthy."
+    # Het model kreeg het besluit te zien en de vaste vervolgopdracht, niet iets uit de browser.
+    berichten = llm.aanroepen[2]["messages"]
+    assert berichten[-2]["content"].startswith("[Besluit van Olke] Toegestaan en uitgevoerd: radarr herstarten")
+    assert berichten[-1]["content"].startswith("Kijk met je tools")
+    # Een tweede vervolg op hetzelfde voorstel mag niet.
+    assert client.post("/api/assistent/send", headers=BORD, json={"followUp": p["id"]}).status_code == 409
+    gesprek = client.get("/api/assistent/conversation").json()["messages"]
+    assert [m["who"] for m in gesprek] == ["me", "steps", "bot", "sys", "sys", "steps", "bot"]
+    assert gesprek[4]["text"].startswith("Toegestaan en uitgevoerd: radarr herstarten")
+    [d] = client.get("/api/assistent/done").json()
+    assert d["title"] == "radarr herstarten" and d["result"] == "ok" and d["output"] == "radarr is herstart"
+
+
+def test_weigeren_staat_in_gesprek_zonder_vervolg(opzet):
+    client, _, _, _ = opzet(HERSTART)
+    p = stel_herstart_voor(client)["proposals"][0]
+    client.post("/api/assistent/decide", headers=BORD, json={"id": p["id"], "approved": False})
+    assert client.get("/api/assistent/conversation").json()["messages"][-1]["text"] == "Geweigerd: radarr herstarten."
+    assert client.post("/api/assistent/send", headers=BORD, json={"followUp": p["id"]}).status_code == 409
+    assert client.get("/api/assistent/done").json()[0]["result"] == "denied"
+
+
+def test_vervolg_op_onbekend_voorstel(opzet):
+    client, _, _, _ = opzet([])
+    assert client.post("/api/assistent/send", headers=BORD, json={"followUp": "bestaat-niet"}).status_code == 409
+    assert client.post("/api/assistent/send", headers=BORD, json={"followUp": 5}).status_code == 400

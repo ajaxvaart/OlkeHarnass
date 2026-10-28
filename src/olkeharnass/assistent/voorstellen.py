@@ -119,3 +119,12 @@ class VoorstelStore:
                 "UPDATE voorstellen SET status = 'geweigerd', besloten = ?, door = ?"
                 " WHERE id = ? AND status = 'open'", (time.time(), door, id_))
         return c.rowcount == 1
+
+    def besloten(self, aantal: int = 20) -> list[dict[str, Any]]:
+        """De laatste besluiten, nieuwste eerst, voor de lijst Uitgevoerd in het bord."""
+        with self._lock:
+            rijen = self._db.execute(
+                "SELECT titel, status, besloten, uitkomst FROM voorstellen"
+                " WHERE status IN ('uitgevoerd', 'mislukt', 'geweigerd')"
+                " ORDER BY besloten DESC LIMIT ?", (aantal,)).fetchall()
+        return [{"titel": r[0], "status": r[1], "besloten": r[2], "uitkomst": r[3]} for r in rijen]
