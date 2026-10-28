@@ -112,7 +112,7 @@ def test_bazarr_ondertitels_en_foutregels():
 def test_prowlarr_update_is_info_en_handmatig_uit_is_geen_storing():
     r = rapport("prowlarr", Server())
     assert [t.code for t in r.treffers] == ["update"]
-    assert als_tekst(r).startswith("Geen problemen gevonden bij Prowlarr.")
+    assert als_tekst(r).startswith("Geen storing gevonden bij Prowlarr. Wel ter info:")
 
 
 def test_prowlarr_storing_wordt_herkend():

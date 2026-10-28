@@ -55,7 +55,7 @@ def als_tekst(r: Rapport) -> str:
     regels = []
     problemen = [t for t in r.treffers if t.ernst != "info"]
     if not problemen:
-        regels.append(f"Geen problemen gevonden bij {naam}.")
+        regels.append(f"Geen storing gevonden bij {naam}." + (" Wel ter info:" if r.treffers else ""))
     else:
         regels.append(f"Bij {naam} zie ik {len(problemen)} {'probleem' if len(problemen) == 1 else 'problemen'}:")
     for t in r.treffers:
