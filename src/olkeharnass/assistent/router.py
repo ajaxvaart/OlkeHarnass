@@ -14,9 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import secrets
 import time
-from collections import OrderedDict
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -26,6 +24,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from ..lus import VerzoekFout, voer_chat_uit_stapsgewijs
 from ..tools.acties import Actie, acties as alle_acties
 from ..tools.registry import ToolContext
+from .gesprekken import GesprekStore
 from .meldingen import Logboek, Ntfy
 from .toegang import CloudflareToegang
 from .voorstellen import VoorstelStore
@@ -33,8 +32,6 @@ from .voorstellen import VoorstelStore
 log = logging.getLogger("olkeharnass.assistent")
 
 MAX_TEKST = 2000
-MAX_GESPREKKEN = 20
-MAX_GESCHIEDENIS = 40  # berichten per gesprek die bewaard blijven
 UITVOER_TIMEOUT = 60.0
 KOP_BORD = "x-bord-assistent"
 
@@ -50,6 +47,7 @@ in het bord moet goedkeuren. Zeg dan dat het voorstel klaarstaat, nooit dat het 
 - Stel een actie alleen voor als die het probleem waarschijnlijk oplost, met een duidelijke reden. \
 Alleen een actie-tool maakt een voorstel. Is er geen tool voor, of weigert de tool, \
 zeg dan dat je het niet kunt voorstellen.
+- Een bericht dat begint met [Besluit van Olke] zegt wat er met een voorstel gebeurd is.
 - Je hebt geen shell en geen sudo. Kan iets alleen zo, leg dan uit wat Olke zelf \
 in de terminal kan doen."""
 
@@ -88,6 +86,14 @@ def stap_label(naam: str, ruwe_args: str) -> str:
     tekst = maskeer(" ".join(tekst.split()))
     return tekst if len(tekst) <= MAX_STAP else tekst[:MAX_STAP - 1] + "…"
 
+VERVOLG = ("Kijk met je tools of het probleem nu is opgelost en meld dat kort. "
+           "Is het niet opgelost, zeg dan wat je ziet; stel niet meteen iets nieuws voor.")
+
+
+def _tijd(t: float) -> str:
+    vandaag = time.strftime("%d-%m") == time.strftime("%d-%m", time.localtime(t))
+    return time.strftime("%H:%M" if vandaag else "%d-%m %H:%M", time.localtime(t))
+
 
 def _fout(status: int, bericht: str) -> JSONResponse:
     return JSONResponse(status_code=status, content={"error": {"message": bericht,
@@ -109,7 +115,7 @@ class Assistent:
             toegang = CloudflareToegang(self.cfg.cloudflare)
         self.toegang = toegang
         self.acties = alle_acties if acties is None else acties
-        self.gesprekken: OrderedDict[str, list[dict[str, str]]] = OrderedDict()
+        self.gesprekken = GesprekStore(self.settings.opslag.database, self.cfg.gesprek_bewaar_dagen)
         # Een klein model op een kleine GPU: een vraag tegelijk.
         self.bezig = asyncio.Lock()
 
@@ -138,20 +144,61 @@ class Assistent:
                 return {k: v for k, v in e.items() if k != "type"}
         raise AssertionError("assistent eindigde zonder resultaat")
 
+    def _geschiedenis(self, gesprek: str) -> list[dict[str, str]]:
+        """Wat het model van eerdere beurten terugziet: vragen, antwoorden en besluiten."""
+        uit: list[dict[str, str]] = []
+        for b in self.gesprekken.berichten(gesprek):
+            if b["soort"] == "vraag":
+                uit.append({"role": "user", "content": b["tekst"]})
+            elif b["soort"] == "antwoord":
+                uit.append({"role": "assistant", "content": b["tekst"]})
+            elif b["soort"] == "voorstel" and uit and uit[-1]["role"] == "assistant":
+                uit[-1] = {"role": "assistant",
+                           "content": uit[-1]["content"] + f"\n[Voorstel klaargezet: {b['tekst']}]"}
+            elif b["soort"] == "uitkomst":
+                uit.append({"role": "user", "content": f"[Besluit van Olke] {b['tekst']}"})
+        return uit[-self.cfg.max_berichten:] if self.cfg.max_berichten else []
+
+    def gesprek_voor_bord(self, gesprek: str) -> list[dict[str, Any]]:
+        uit: list[dict[str, Any]] = []
+        for b in self.gesprekken.berichten(gesprek):
+            soort = b["soort"]
+            if soort == "vraag":
+                uit.append({"who": "me", "text": b["tekst"]})
+            elif soort == "antwoord":
+                uit.append({"who": "bot", "text": b["tekst"]})
+            elif soort == "stappen":
+                uit.append({"who": "steps", "steps": (b["extra"] or {}).get("stappen", []),
+                            "s": (b["extra"] or {}).get("s", 0)})
+            elif soort == "voorstel":
+                uit.append({"who": "sys", "text": f"Voorstel klaargezet: {b['tekst']}."})
+            else:
+                uit.append({"who": "sys", "text": b["tekst"]})
+        return uit
+
+    def besloten_voor_bord(self) -> list[dict[str, Any]]:
+        woorden = {"uitgevoerd": ("ok", "Toegestaan en uitgevoerd"), "mislukt": ("fail", "Mislukt"),
+                   "geweigerd": ("denied", "Geweigerd")}
+        return [{"time": _tijd(b["besloten"] or 0), "title": b["titel"],
+                 "result": woorden[b["status"]][0], "note": woorden[b["status"]][1],
+                 "output": b["uitkomst"] or ""} for b in self.store.besloten()]
+
     async def send_stapsgewijs(self, tekst: str, gesprek_id: str | None, wie: str,
-                               live: bool = True) -> AsyncIterator[dict[str, Any]]:
+                               live: bool = True, vervolg: bool = False
+                               ) -> AsyncIterator[dict[str, Any]]:
         """Levert events voor het bord: "stap", "stap_klaar", "tekst" en als laatste "klaar".
 
         Met `live` wordt het model gestreamd, zodat de tekst al verschijnt terwijl
-        hij geschreven wordt. Wachten op de beurt telt mee voor de time-out.
+        hij geschreven wordt. Wachten op de beurt telt mee voor de time-out. Met
+        `vervolg` is `tekst` een opdracht van de harnass zelf (na een besluit) en
+        wordt hij niet als vraag van Olke bewaard.
         """
-        if gesprek_id not in self.gesprekken:
-            gesprek_id = secrets.token_urlsafe(9)
-            self.gesprekken[gesprek_id] = []
-            while len(self.gesprekken) > MAX_GESPREKKEN:
-                self.gesprekken.popitem(last=False)
-        self.gesprekken.move_to_end(gesprek_id)
-        geschiedenis = self.gesprekken[gesprek_id]
+        if not self.gesprekken.bestaat(gesprek_id):
+            gesprek_id = self.gesprekken.nieuw()
+        assert gesprek_id is not None
+        geschiedenis = self._geschiedenis(gesprek_id)
+        if not vervolg:
+            self.gesprekken.voeg_toe(gesprek_id, "vraag", tekst)
 
         nieuw: list[Any] = []
 
@@ -164,9 +211,7 @@ class Assistent:
             return {"id": v.id, "title": v.titel}
 
         nu = time.strftime("%d-%m-%Y %H:%M")
-        berichten = [{"role": "system", "content": SYSTEEMPROMPT.format(nu=nu)}]
-        if self.cfg.max_berichten:
-            berichten += geschiedenis[-self.cfg.max_berichten:]
+        berichten = [{"role": "system", "content": SYSTEEMPROMPT.format(nu=nu)}, *geschiedenis]
         berichten.append({"role": "user", "content": tekst})
         verzoek = {"model": self.cfg.model, "messages": berichten, "temperature": 0.3}
         st = self.api.state
@@ -176,6 +221,8 @@ class Assistent:
             return max(0.0, eind - time.monotonic())
 
         antwoord = ""
+        stappen: list[dict[str, Any]] = []
+        begin = time.monotonic()
         try:
             await asyncio.wait_for(self.bezig.acquire(), rest())
             try:
@@ -190,8 +237,11 @@ class Assistent:
                         except StopAsyncIteration:
                             break
                         if soort == "tool" and data["fase"] == "start":
-                            yield {"type": "stap", "tekst": stap_label(data["naam"], data["arguments"])}
+                            stappen.append({"tekst": stap_label(data["naam"], data["arguments"])})
+                            yield {"type": "stap", "tekst": stappen[-1]["tekst"]}
                         elif soort == "tool":
+                            if stappen:
+                                stappen[-1].update(ok=data["ok"], ms=data["duur_ms"])
                             yield {"type": "stap_klaar", "ok": data["ok"], "ms": data["duur_ms"]}
                         elif soort == "delta":
                             stuk = data["choices"][0]["delta"].get("content")
@@ -214,12 +264,12 @@ class Assistent:
             log.exception("assistent: fout bij het model")
             antwoord = f"Het model gaf een fout ({type(e).__name__}). Draait Ollama?"
 
-        onthouden = antwoord
-        if nieuw:
-            onthouden += "\n[Voorstellen klaargezet: " + "; ".join(v.titel for v in nieuw) + "]"
-        geschiedenis += [{"role": "user", "content": tekst},
-                         {"role": "assistant", "content": onthouden}]
-        del geschiedenis[:-MAX_GESCHIEDENIS]
+        if stappen:
+            self.gesprekken.voeg_toe(gesprek_id, "stappen", "", {
+                "stappen": stappen, "s": round(time.monotonic() - begin)})
+        self.gesprekken.voeg_toe(gesprek_id, "antwoord", antwoord)
+        for v in nieuw:
+            self.gesprekken.voeg_toe(gesprek_id, "voorstel", v.titel, voorstel=v.id)
         yield {"type": "klaar", "text": antwoord, "proposals": [v.voor_bord() for v in nieuw],
                "conversation": gesprek_id}
 
@@ -248,6 +298,7 @@ class Assistent:
                 return JSONResponse(status_code=409, content={
                     "ok": False, "output": "Dit voorstel was al afgehandeld"})
             await self._meld("geweigerd", v, wie)
+            self._in_gesprek(v, f"Geweigerd: {v.titel}.", "denied")
             return JSONResponse({"ok": True, "output": "Geweigerd, niet uitgevoerd"})
 
         email = await self.email(request)
@@ -278,7 +329,21 @@ class Assistent:
         self.store.afronden(id_, gelukt, uitkomst)
         await self._meld("uitgevoerd" if gelukt else "mislukt", v, email, uitkomst,
                          prioriteit=3 if gelukt else 4)
-        return JSONResponse({"ok": gelukt, "output": uitkomst})
+        gesprek = self._in_gesprek(
+            v, f"{'Toegestaan en uitgevoerd' if gelukt else 'Mislukt'}: {v.titel}. {uitkomst}".strip(),
+            "ok" if gelukt else "fail")
+        # Met followUp vraagt het bord daarna een vervolgbeurt: kijken of het geholpen heeft.
+        return JSONResponse({"ok": gelukt, "output": uitkomst, "conversation": gesprek,
+                             "followUp": gesprek is not None})
+
+    def _in_gesprek(self, v: Any, tekst: str, resultaat: str) -> str | None:
+        """Zet een besluit in het gesprek waarin het voorstel gedaan is."""
+        gesprek = self.gesprekken.gesprek_van_voorstel(v.id)
+        if gesprek:
+            self.gesprekken.voeg_toe(gesprek, "uitkomst", tekst,
+                                     {"resultaat": resultaat, "vervolgd": int(resultaat == "denied")},
+                                     voorstel=v.id)
+        return gesprek
 
 
 def maak_router(assistent: Assistent) -> APIRouter:
@@ -301,19 +366,34 @@ def maak_router(assistent: Assistent) -> APIRouter:
         wie = await assistent.wie(request)
         if wie is None:
             return _fout(403, "de assistent is alleen bereikbaar via Cloudflare Access")
-        body = await _json(request)
-        tekst = body.get("text") if body else None
-        if not isinstance(tekst, str) or not tekst.strip():
-            return _fout(400, "veld `text` ontbreekt")
-        if len(tekst) > MAX_TEKST:
-            return _fout(400, f"bericht te lang (max {MAX_TEKST} tekens)")
-        gesprek = body.get("conversation")
-        gesprek = gesprek if isinstance(gesprek, str) else None
+        body = await _json(request) or {}
+        vervolg = body.get("followUp")
+        if vervolg is not None:
+            # Na een besluit: de harnass bepaalt de opdracht zelf, niet de browser.
+            if not isinstance(vervolg, str):
+                return _fout(400, "veld `followUp` moet een voorstel-id zijn")
+            gesprek = assistent.gesprekken.gesprek_van_voorstel(vervolg)
+            if gesprek is None or not assistent.gesprekken.claim_vervolg(vervolg):
+                return _fout(409, "geen vervolg mogelijk voor dit voorstel")
+            tekst = VERVOLG
+        else:
+            tekst = body.get("text")
+            if not isinstance(tekst, str) or not tekst.strip():
+                return _fout(400, "veld `text` ontbreekt")
+            if len(tekst) > MAX_TEKST:
+                return _fout(400, f"bericht te lang (max {MAX_TEKST} tekens)")
+            tekst = tekst.strip()
+            gesprek = body.get("conversation")
+            gesprek = gesprek if isinstance(gesprek, str) else None
         if body.get("stream") is not True:
-            return await assistent.send(tekst.strip(), gesprek, wie)
+            async for e in assistent.send_stapsgewijs(tekst, gesprek, wie, live=False,
+                                                      vervolg=vervolg is not None):
+                if e["type"] == "klaar":
+                    return {k: v for k, v in e.items() if k != "type"}
 
         async def events() -> AsyncIterator[str]:
-            async for e in assistent.send_stapsgewijs(tekst.strip(), gesprek, wie):
+            async for e in assistent.send_stapsgewijs(tekst, gesprek, wie,
+                                                      vervolg=vervolg is not None):
                 yield f"data: {json.dumps(e, ensure_ascii=False)}\n\n"
 
         # no-transform/X-Accel-Buffering: proxy's (Caddy, Cloudflare) niet laten bufferen.
@@ -328,6 +408,27 @@ def maak_router(assistent: Assistent) -> APIRouter:
         if not body or not isinstance(body.get("id"), str) or not isinstance(body.get("approved"), bool):
             return _fout(400, "verwacht {id: string, approved: boolean}")
         return await assistent.decide(request, body["id"], body["approved"])
+
+    @router.get("/conversation")
+    async def conversation(request: Request, id: str | None = None) -> Any:
+        if await assistent.wie(request) is None:
+            return _fout(403, "de assistent is alleen bereikbaar via Cloudflare Access")
+        g = id if assistent.gesprekken.bestaat(id) else assistent.gesprekken.laatste()
+        return {"conversation": g, "messages": assistent.gesprek_voor_bord(g) if g else []}
+
+    @router.post("/new")
+    async def nieuw(request: Request) -> Any:
+        if not _bord_kop(request):
+            return _fout(403, "kop X-Bord-Assistent ontbreekt")
+        if await assistent.wie(request) is None:
+            return _fout(403, "de assistent is alleen bereikbaar via Cloudflare Access")
+        return {"conversation": assistent.gesprekken.nieuw()}
+
+    @router.get("/done")
+    async def done(request: Request) -> Any:
+        if await assistent.wie(request) is None:
+            return _fout(403, "de assistent is alleen bereikbaar via Cloudflare Access")
+        return assistent.besloten_voor_bord()
 
     @router.get("/pending")
     async def pending(request: Request) -> Any:

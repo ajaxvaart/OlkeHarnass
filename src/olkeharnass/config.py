@@ -186,6 +186,7 @@ class AssistentConfig(BaseModel):
     logboek: str = "data/acties.jsonl"
     voorstel_geldig_minuten: int = Field(default=60, ge=1)
     max_berichten: int = Field(default=12, ge=0)  # zoveel eerdere berichten gaan mee
+    gesprek_bewaar_dagen: int = Field(default=30, ge=1)  # daarna wordt een gesprek opgeruimd
     # Cloudflare breekt een verzoek na 100 seconden af; blijf daaronder.
     antwoord_timeout: float = Field(default=90.0, gt=0)
 

@@ -48,6 +48,10 @@ OlkeHarnass: lokale AI-harnass voor Olke's eigen apps. Lees README.md voor gebru
   herstarten) via vaste commando's en de polkit-regel in `deploy/polkit/`; een nieuwe
   systeemactie vraagt ook een aanpassing van die regel. Eisen staan in OlkeDashboard
   `docs/assistent-en-veiligheid.md`; niet versoepelen zonder Olke.
+- Gesprekken van de assistent staan in SQLite (`assistent/gesprekken.py`, 30 dagen) en
+  overleven herstarten. Een besluit over een voorstel komt in het gesprek; het bord vraagt
+  daarna een vervolgbeurt met `followUp: <voorstel-id>`. De opdracht daarvoor maakt de
+  harnass zelf (`VERVOLG`), nooit uit de browser.
 - Server-tools (`tools/ingebouwd/server.py`) praten alleen HTTP met localhost via
   `ctx.http`; tests gebruiken `httpx.MockTransport` (`maak_app(..., http_transport=...)`).
   Uitvoer kort houden (klein model) en door `maskeer()` halen.
