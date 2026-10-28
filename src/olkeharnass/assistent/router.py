@@ -22,6 +22,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from ..lus import VerzoekFout, voer_chat_uit_stapsgewijs
+from ..onderzoek import DIENSTEN, NAMEN, als_tekst, onderzoek
 from ..tools.acties import Actie, acties as alle_acties
 from ..tools.registry import ToolContext
 from .gesprekken import GesprekStore
@@ -40,8 +41,8 @@ SYSTEEMPROMPT = """Je bent de assistent van Olke voor zijn thuisserver apulinux 
 Het is nu {nu}.
 
 - Antwoord in het Nederlands, kort en concreet.
-- Zoek het eerst uit met je tools; begin meestal met bord_status. Verzin niets: \
-weet je iets niet, zeg dat dan.
+- Zoek het eerst uit met je tools. Gaat het om een dienst, gebruik dan eerst onderzoek; \
+voor een overzicht bord_status. Verzin niets: weet je iets niet, zeg dat dan.
 - Zelf verander je niets. Een actie-tool zet alleen een voorstel klaar dat Olke \
 in het bord moet goedkeuren. Zeg dan dat het voorstel klaarstaat, nooit dat het al gedaan is.
 - Stel een actie alleen voor als die het probleem waarschijnlijk oplost, met een duidelijke reden. \
@@ -62,6 +63,7 @@ STAP_LABELS = {
     "arr_status": ("{app} bekijken", "Sonarr/Radarr/Prowlarr bekijken"),
     "sabnzbd_status": ("SABnzbd bekijken", ""),
     "updates": ("Updates opzoeken", ""),
+    "onderzoek": ("{dienst} onderzoeken", "Dienst onderzoeken"),
 }
 MAX_STAP = 80
 
@@ -273,6 +275,70 @@ class Assistent:
         yield {"type": "klaar", "text": antwoord, "proposals": [v.voor_bord() for v in nieuw],
                "conversation": gesprek_id}
 
+    # --- onderzoek van een dienst (knop Onderzoek in het bord) ---
+
+    def _stel_voor_uit_treffer(self, naam: str, args: dict[str, Any], reden: str, wie: str) -> Any:
+        """Een actie uit de catalogus als voorstel, met dezelfde controles als via het model."""
+        a = self.acties.get(naam)
+        if a is None or not self.app.mag_tool(naam):
+            return None
+        for v in self.store.open_voorstellen():
+            if v.actie == naam and {k: x for k, x in v.args.items() if k != "reden"} == args:
+                return None  # staat al klaar
+        try:
+            parsed = a.args_model.model_validate({**args, "reden": reden[:200]})
+        except ValueError:
+            return None
+        if a.controle and a.controle(parsed, self._ctx()):
+            return None
+        v = self.store.maak(a.naam, parsed.model_dump(), a.titel(parsed), a.cmd(parsed),
+                            parsed.reden, a.risico)
+        self.logboek.schrijf("voorgesteld", id=v.id, actie=a.naam, args=v.args,
+                             risico=a.risico, titel=v.titel, wie=wie, bron="onderzoek")
+        return v
+
+    async def onderzoek_stapsgewijs(self, dienst: str, gesprek_id: str | None, wie: str
+                                    ) -> AsyncIterator[dict[str, Any]]:
+        """Verzamelen en herkennen in code, zonder model; bekende oplossingen worden voorstellen."""
+        if not self.gesprekken.bestaat(gesprek_id):
+            gesprek_id = self.gesprekken.nieuw()
+        assert gesprek_id is not None
+        naam = NAMEN.get(dienst, dienst)
+        self.gesprekken.voeg_toe(gesprek_id, "vraag", f"Onderzoek {naam}")
+        begin = time.monotonic()
+        stappen = [{"tekst": f"Feiten verzamelen: {naam}"}]
+        yield {"type": "stap", "tekst": stappen[0]["tekst"]}
+        t0 = time.monotonic()
+        try:
+            rapport = await asyncio.wait_for(onderzoek(dienst, self._ctx()), self.cfg.antwoord_timeout)
+        except Exception as e:
+            log.exception("onderzoek %s mislukt", dienst)
+            stappen[0].update(ok=False, ms=int((time.monotonic() - t0) * 1000))
+            yield {"type": "stap_klaar", "ok": False, "ms": stappen[0]["ms"]}
+            tekst = f"Het onderzoek van {naam} liep vast ({type(e).__name__})."
+            rapport = None
+        else:
+            stappen[0].update(ok=not rapport.feiten.leesfouten, ms=int((time.monotonic() - t0) * 1000))
+            yield {"type": "stap_klaar", "ok": stappen[0]["ok"], "ms": stappen[0]["ms"]}
+            stappen.append({"tekst": "Bekende problemen herkennen", "ok": True, "ms": 0})
+            yield {"type": "stap", "tekst": stappen[1]["tekst"]}
+            yield {"type": "stap_klaar", "ok": True, "ms": 0}
+            tekst = als_tekst(rapport)
+        nieuw = []
+        if rapport is not None:
+            for t in rapport.treffers:
+                for actie_naam, args in t.acties:
+                    v = self._stel_voor_uit_treffer(actie_naam, args, t.wat, wie)
+                    if v is not None:
+                        nieuw.append(v)
+        self.gesprekken.voeg_toe(gesprek_id, "stappen", "", {
+            "stappen": stappen, "s": round(time.monotonic() - begin)})
+        self.gesprekken.voeg_toe(gesprek_id, "antwoord", tekst)
+        for v in nieuw:
+            self.gesprekken.voeg_toe(gesprek_id, "voorstel", v.titel, voorstel=v.id)
+        yield {"type": "klaar", "text": tekst, "proposals": [v.voor_bord() for v in nieuw],
+               "conversation": gesprek_id}
+
     # --- besluiten ---
 
     async def _meld(self, gebeurtenis: str, v: Any, wie: str, uitkomst: str = "",
@@ -397,6 +463,31 @@ def maak_router(assistent: Assistent) -> APIRouter:
                 yield f"data: {json.dumps(e, ensure_ascii=False)}\n\n"
 
         # no-transform/X-Accel-Buffering: proxy's (Caddy, Cloudflare) niet laten bufferen.
+        return StreamingResponse(events(), media_type="text/event-stream", headers={
+            "Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no"})
+
+    @router.post("/onderzoek")
+    async def onderzoek_route(request: Request) -> Any:
+        if not _bord_kop(request):
+            return _fout(403, "kop X-Bord-Assistent ontbreekt")
+        wie = await assistent.wie(request)
+        if wie is None:
+            return _fout(403, "de assistent is alleen bereikbaar via Cloudflare Access")
+        body = await _json(request) or {}
+        dienst = body.get("service")
+        if dienst not in DIENSTEN:
+            return _fout(400, "onbekende dienst; kies uit " + ", ".join(DIENSTEN))
+        gesprek = body.get("conversation") if isinstance(body.get("conversation"), str) else None
+        gen = assistent.onderzoek_stapsgewijs(dienst, gesprek, wie)
+        if body.get("stream") is not True:
+            async for e in gen:
+                if e["type"] == "klaar":
+                    return {k: v for k, v in e.items() if k != "type"}
+
+        async def events() -> AsyncIterator[str]:
+            async for e in gen:
+                yield f"data: {json.dumps(e, ensure_ascii=False)}\n\n"
+
         return StreamingResponse(events(), media_type="text/event-stream", headers={
             "Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no"})
 

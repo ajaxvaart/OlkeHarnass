@@ -138,6 +138,27 @@ kan met `sudo shutdown -c`.
 
 Terugdraaien: `sudo rm /etc/polkit-1/rules.d/50-olkeharnass.rules`.
 
+## 10. Onderzoek van alle diensten
+
+De knop Onderzoek en de tool `onderzoek` lezen ook Bazarr, Seerr, Jellyfin, Immich en
+Vaultwarden. Daarvoor vier keys erbij in `.env` (Vaultwarden heeft er geen nodig):
+
+```bash
+{
+  echo "BAZARR_API_KEY=$(awk '/^auth:/{a=1;next} a&&/apikey:/{gsub(/["'"'"']/,"",$2);print $2;exit}' /srv/docker/bazarr/config/config.yaml)"
+  echo "SEERR_API_KEY=$(python3 -c "import json;print(json.load(open('/srv/docker/seerr/settings.json'))['main']['apiKey'])")"
+  grep -E '^(JELLYFIN|IMMICH)_API_KEY=' ~/.config/bord/secrets.env
+} | sudo tee -a /opt/olkeharnass/.env > /dev/null
+sudo grep -c '=.' /opt/olkeharnass/.env     # verwacht: 8
+```
+
+Neem uit `config/olkeharnass.example.yaml` over: de nieuwe `diensten`, de langere lijsten
+`containers_logs` en `containers_herstarten`, en `onderzoek` en `bazarr_zoek_ondertitels`
+bij `apps.bord.tools`. Daarna `sudo systemctl restart olkeharnass`.
+
+Terugdraaien: `sudo sed -i '/^\(BAZARR\|SEERR\|JELLYFIN\|IMMICH\)_API_KEY=/d' /opt/olkeharnass/.env`
+en de config terugzetten.
+
 ## Terugdraaien
 
 Elke stap los, in omgekeerde volgorde:
@@ -157,6 +178,9 @@ config en herstart. Acties tijdelijk onmogelijk maken: haal het blok `cloudflare
 
 - Lezen: bord-status, containers, logs (van de containers in `containers_logs`, met
   geheimen gemaskeerd), Prometheus, Sonarr/Radarr/Prowlarr-meldingen en wachtrijen, SABnzbd.
+- Onderzoek per dienst (knop in het bord of tool `onderzoek`): feiten verzamelen en bekende
+  problemen herkennen in code (`src/olkeharnass/onderzoek/`), zonder model; bekende
+  oplossingen worden voorstellen.
 - Voorstellen (pas na Toestaan in het bord, via Cloudflare Access): container herstarten
   (alleen die in `containers_herstarten`), ontbrekende items zoeken, indexers testen,
   SABnzbd pauzeren/hervatten, mislukte download opnieuw.
