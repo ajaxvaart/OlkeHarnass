@@ -55,6 +55,9 @@ OlkeHarnass: lokale AI-harnass voor Olke's eigen apps. Lees README.md voor gebru
 - Server-tools (`tools/ingebouwd/server.py`) praten alleen HTTP met localhost via
   `ctx.http`; tests gebruiken `httpx.MockTransport` (`maak_app(..., http_transport=...)`).
   Uitvoer kort houden (klein model) en door `maskeer()` halen.
+- Onderzoek (`onderzoek/`): `verzamel.py` haalt per dienst de feiten op (Docker, logs, app-API),
+  `catalogus.py` herkent bekende problemen met hun acties. Geen model; een nieuw probleem
+  wordt een nieuwe regel met test. Knop in het bord: `POST /api/assistent/onderzoek`.
 - Op apulinux draait de dienst als gebruiker `olkeharnass` (niet in docker/sudo).
   Installatie en terugdraaien: `docs/installatie-assistent.md`.
 

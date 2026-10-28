@@ -68,7 +68,8 @@ apps:
     tools: [huidige_tijd, bord_status, containers, container_logs, prometheus, arr_status,
             sabnzbd_status, herstart_container, zoek_ontbrekend, test_indexers,
             sabnzbd_pauzeer, sabnzbd_hervat, sabnzbd_opnieuw,
-            updates, herstart_ollama, herstart_server]   # laatste twee: polkit-regel nodig
+            updates, herstart_ollama, herstart_server,   # laatste twee: polkit-regel nodig
+            onderzoek, bazarr_zoek_ondertitels]
     max_tool_rondes: 4
 
 # Waar de server-tools hun gegevens halen. Alles op localhost.
@@ -76,13 +77,20 @@ server_tools:
   docker_url: http://127.0.0.1:2375                   # socket-proxy, zie deploy/socket-proxy
   bord_status_url: http://127.0.0.1:8099/status.json
   prometheus_url: http://127.0.0.1:9090
-  containers_logs: [sonarr, radarr, prowlarr, bazarr, sabnzbd, seerr, jellyfin]
-  containers_herstarten: [sonarr, radarr, prowlarr, bazarr, sabnzbd, seerr]
+  containers_logs: [sonarr, radarr, prowlarr, bazarr, sabnzbd, seerr, jellyfin, vaultwarden,
+                    immich_server, immich_machine_learning, cloudflared]
+  containers_herstarten: [sonarr, radarr, prowlarr, bazarr, sabnzbd, seerr, jellyfin, vaultwarden,
+                          immich_server, immich_machine_learning, cloudflared]
   diensten:                                           # keys in /opt/olkeharnass/.env
     sonarr: {url: "http://127.0.0.1:8989", key_env: SONARR_API_KEY}
     radarr: {url: "http://127.0.0.1:7878", key_env: RADARR_API_KEY}
     prowlarr: {url: "http://127.0.0.1:9696", key_env: PROWLARR_API_KEY}
     sabnzbd: {url: "http://127.0.0.1:8080", key_env: SABNZBD_API_KEY}
+    bazarr: {url: "http://127.0.0.1:6767", key_env: BAZARR_API_KEY}
+    seerr: {url: "http://127.0.0.1:5055", key_env: SEERR_API_KEY}
+    jellyfin: {url: "http://127.0.0.1:8096", key_env: JELLYFIN_API_KEY}
+    immich: {url: "http://127.0.0.1:2283", key_env: IMMICH_API_KEY}
+    vaultwarden: {url: "http://127.0.0.1:8088"}       # alleen /alive, geen key
 
 # De assistent in het bord (/api/assistent/*, via Caddy).
 assistent:
