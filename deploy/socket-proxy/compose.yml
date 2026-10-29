@@ -2,7 +2,8 @@
 #
 # De harnass krijgt nooit de Docker-socket zelf: wie daarbij kan, is in de praktijk
 # root (en op deze machine draait ook Vaultwarden). Deze proxy laat alleen door:
-# containers en logs lezen (CONTAINERS=1) en stop/herstart (ALLOW_RESTARTS=1).
+# containers lezen (CONTAINERS=1), logs lezen (ALLOW_LOGS=1, staat standaard uit)
+# en stop/herstart (ALLOW_RESTARTS=1).
 # Al het andere (exec, images, volumes, nieuwe containers, ...) geeft 403.
 #
 # Let op: lezen omvat ook /containers/<naam>/json, met de omgevingsvariabelen van
@@ -18,6 +19,7 @@ services:
     environment:
       - CONTAINERS=1
       - ALLOW_RESTARTS=1
+      - ALLOW_LOGS=1
       - POST=0
       - PING=1
       - VERSION=1
